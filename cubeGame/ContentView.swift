@@ -231,16 +231,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
             print("   Hit test results count: \(hitResults.count)")
             
             if let firstHit = hitResults.first {
-                print("   First hit node: \(firstHit.node.name ?? "unnamed")")
+                print("   First hit node name: \(firstHit.node.name ?? "unnamed")")
                 print("   Hit world position: \(firstHit.worldCoordinates)")
                 
-                if let nodeName = firstHit.node.name, nodeName.hasPrefix("cube_") {
-                    let components = nodeName.components(separatedBy: "_")
-                    if components.count >= 4, let x = Int(components[1]), let y = Int(components[2]), let z = Int(components[3]) {
-                        print("   🎯 HIT CUBE at logical position: (\(x), \(y), \(z))")
-                        print("   ✅ Using row (y): \(y)")
-                        return y
-                    }
+                // Find the matching piece by node reference (not name!)
+                if let hitPiece = cubePieces.first(where: { $0.node == firstHit.node }) {
+                    let (x, y, z) = hitPiece.position
+                    print("   🎯 HIT CUBE with CURRENT logical position: (\(x), \(y), \(z))")
+                    print("   ✅ Using row (y): \(y)")
+                    return y
                 }
             }
             
@@ -257,16 +256,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
             print("   Hit test results count: \(hitResults.count)")
             
             if let firstHit = hitResults.first {
-                print("   First hit node: \(firstHit.node.name ?? "unnamed")")
+                print("   First hit node name: \(firstHit.node.name ?? "unnamed")")
                 print("   Hit world position: \(firstHit.worldCoordinates)")
                 
-                if let nodeName = firstHit.node.name, nodeName.hasPrefix("cube_") {
-                    let components = nodeName.components(separatedBy: "_")
-                    if components.count >= 4, let x = Int(components[1]), let y = Int(components[2]), let z = Int(components[3]) {
-                        print("   🎯 HIT CUBE at logical position: (\(x), \(y), \(z))")
-                        print("   ✅ Using column (x): \(x)")
-                        return x
-                    }
+                // Find the matching piece by node reference (not name!)
+                if let hitPiece = cubePieces.first(where: { $0.node == firstHit.node }) {
+                    let (x, y, z) = hitPiece.position
+                    print("   🎯 HIT CUBE with CURRENT logical position: (\(x), \(y), \(z))")
+                    print("   ✅ Using column (x): \(x)")
+                    return x
                 }
             }
             
