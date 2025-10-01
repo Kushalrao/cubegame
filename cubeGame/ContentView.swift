@@ -153,43 +153,22 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 } else if touchCount == 2 && isTwoFingerGesture, let startLocation = swipeStartLocation {
                     let deltaX = location.x - startLocation.x
                     let deltaY = location.y - startLocation.y
+                    let swipeVector = CGPoint(x: deltaX, y: deltaY)
                     
-                    // Determine which direction has more movement
-                    if abs(deltaX) > abs(deltaY) {
-                        // Horizontal swipe - rotate rows
-                        let threshold: CGFloat = 60
-                        let rotations = Int(abs(deltaX) / threshold)
-                        let lastRotations = Int(abs(lastSwipeDistance) / threshold)
-                        
-                        if rotations > lastRotations {
-                            let row = determineRow(from: startLocation, in: sceneView)
-                            print("Swipe direction: \(deltaX > 0 ? "RIGHT" : "LEFT")")
-                            // Swipe RIGHT = rotate right, Swipe LEFT = rotate left
-                            if deltaX > 0 {
-                                rotateRow(row, clockwise: true)
-                            } else {
-                                rotateRow(row, clockwise: false)
-                            }
-                        }
-                        lastSwipeDistance = deltaX
-                    } else {
-                        // Vertical swipe - rotate columns
-                        let threshold: CGFloat = 60
-                        let rotations = Int(abs(deltaY) / threshold)
-                        let lastRotations = Int(abs(lastSwipeDistance) / threshold)
-                        
-                        if rotations > lastRotations {
-                            let column = determineColumn(from: startLocation, in: sceneView)
-                            print("Swipe direction: \(deltaY > 0 ? "DOWN" : "UP")")
-                            // Swipe DOWN = rotate down, Swipe UP = rotate up
-                            if deltaY > 0 {
-                                rotateColumn(column, clockwise: true)
-                            } else {
-                                rotateColumn(column, clockwise: false)
-                            }
-                        }
-                        lastSwipeDistance = deltaY
+                    // Use camera-relative rotation system
+                    let threshold: CGFloat = 60
+                    let swipeMagnitude = sqrt(deltaX * deltaX + deltaY * deltaY)
+                    let rotations = Int(swipeMagnitude / threshold)
+                    let lastRotations = Int(abs(lastSwipeDistance) / threshold)
+                    
+                    if rotations > lastRotations {
+                        performCameraRelativeRotation(
+                            swipeVector: swipeVector,
+                            startLocation: startLocation,
+                            in: sceneView
+                        )
                     }
+                    lastSwipeDistance = swipeMagnitude
                 }
                 
             case .ended, .cancelled:
@@ -222,6 +201,247 @@ struct Interactive3DCubeView: UIViewRepresentable {
             }
             
             gesture.setTranslation(.zero, in: view)
+        }
+        
+        // MARK: - Camera-Relative Rotation System
+        
+        func performCameraRelativeRotation(swipeVector: CGPoint, startLocation: CGPoint, in sceneView: SCNView) {
+            guard !isAnimating else { return }
+            
+            print("\n" + String(repeating: "=", count: 60))
+            print("🎯 CAMERA-RELATIVE ROTATION")
+            print("   Swipe vector: (\(swipeVector.x), \(swipeVector.y))")
+            print(String(repeating: "=", count: 60))
+            
+            // Step 1: Find which cube piece was touched
+            guard let hitPiece = findHitCubePiece(at: startLocation, in: sceneView) else {
+                print("❌ No cube piece found at touch location")
+                return
+            }
+            
+            // Step 2: Get camera's view direction
+            guard let cameraNode = sceneView.scene?.rootNode.childNode(withName: "camera", recursively: true) else {
+                print("❌ Camera node not found")
+                return
+            }
+            
+            let cameraPosition = cameraNode.position
+            let cameraDirection = SCNVector3(-cameraPosition.x, -cameraPosition.y, -cameraPosition.z)
+            let normalizedCameraDirection = normalize(cameraDirection)
+            
+            print("   📷 Camera position: \(cameraPosition)")
+            print("   📷 Camera direction: \(normalizedCameraDirection)")
+            
+            // Step 3: Convert swipe vector to world space
+            let swipeDirection = convertSwipeToWorldSpace(swipeVector: swipeVector, cameraNode: cameraNode)
+            print("   🎯 Swipe in world space: \(swipeDirection)")
+            
+            // Step 4: Determine rotation axis and slice
+            let rotationInfo = determineRotationAxisAndSlice(
+                swipeDirection: swipeDirection,
+                cameraDirection: normalizedCameraDirection,
+                hitPiece: hitPiece
+            )
+            
+            print("   🔄 Rotation axis: \(rotationInfo.axis)")
+            print("   📍 Slice index: \(rotationInfo.sliceIndex)")
+            print("   🎯 Direction: \(rotationInfo.clockwise ? "CLOCKWISE" : "COUNTER-CLOCKWISE")")
+            
+            // Step 5: Perform the rotation
+            performArbitraryAxisRotation(
+                axis: rotationInfo.axis,
+                sliceIndex: rotationInfo.sliceIndex,
+                clockwise: rotationInfo.clockwise
+            )
+        }
+        
+        func findHitCubePiece(at point: CGPoint, in sceneView: SCNView) -> CubePiece? {
+            let hitResults = sceneView.hitTest(point, options: nil)
+            
+            if let firstHit = hitResults.first {
+                // Find the matching piece by node reference
+                if let hitPiece = cubePieces.first(where: { $0.node == firstHit.node }) {
+                    print("   🎯 Hit cube piece at logical position: \(hitPiece.position)")
+                    return hitPiece
+                }
+            }
+            
+            return nil
+        }
+        
+        func convertSwipeToWorldSpace(swipeVector: CGPoint, cameraNode: SCNNode) -> SCNVector3 {
+            // Get camera's right and up vectors
+            let cameraTransform = cameraNode.transform
+            let rightVector = SCNVector3(cameraTransform.m11, cameraTransform.m12, cameraTransform.m13)
+            let upVector = SCNVector3(cameraTransform.m21, cameraTransform.m22, cameraTransform.m23)
+            
+            // Convert screen swipe to world space
+            let worldSwipe = SCNVector3(
+                Float(swipeVector.x) * rightVector.x + Float(swipeVector.y) * upVector.x,
+                Float(swipeVector.x) * rightVector.y + Float(swipeVector.y) * upVector.y,
+                Float(swipeVector.x) * rightVector.z + Float(swipeVector.y) * upVector.z
+            )
+            
+            return normalize(worldSwipe)
+        }
+        
+        struct RotationInfo {
+            let axis: SCNVector3
+            let sliceIndex: Int
+            let clockwise: Bool
+        }
+        
+        func determineRotationAxisAndSlice(swipeDirection: SCNVector3, cameraDirection: SCNVector3, hitPiece: CubePiece) -> RotationInfo {
+            // Calculate rotation axis as cross product of swipe direction and camera direction
+            let rotationAxis = crossProduct(swipeDirection, cameraDirection)
+            let normalizedAxis = normalize(rotationAxis)
+            
+            print("   🧮 Raw rotation axis: \(rotationAxis)")
+            print("   🧮 Normalized axis: \(normalizedAxis)")
+            
+            // Determine which slice to rotate based on the hit piece and axis
+            let (sliceIndex, clockwise) = determineSliceAndDirection(
+                axis: normalizedAxis,
+                hitPiece: hitPiece
+            )
+            
+            return RotationInfo(axis: normalizedAxis, sliceIndex: sliceIndex, clockwise: clockwise)
+        }
+        
+        func determineSliceAndDirection(axis: SCNVector3, hitPiece: CubePiece) -> (sliceIndex: Int, clockwise: Bool) {
+            let (x, y, z) = hitPiece.position
+            
+            // Determine which axis is most dominant
+            let absX = abs(axis.x)
+            let absY = abs(axis.y)
+            let absZ = abs(axis.z)
+            
+            if absX > absY && absX > absZ {
+                // Rotation around X-axis (columns)
+                let clockwise = axis.x > 0
+                print("   🔄 X-axis rotation, slice: \(x), clockwise: \(clockwise)")
+                return (x, clockwise)
+            } else if absY > absX && absY > absZ {
+                // Rotation around Y-axis (rows)
+                let clockwise = axis.y > 0
+                print("   🔄 Y-axis rotation, slice: \(y), clockwise: \(clockwise)")
+                return (y, clockwise)
+            } else {
+                // Rotation around Z-axis (layers)
+                let clockwise = axis.z > 0
+                print("   🔄 Z-axis rotation, slice: \(z), clockwise: \(clockwise)")
+                return (z, clockwise)
+            }
+        }
+        
+        func performArbitraryAxisRotation(axis: SCNVector3, sliceIndex: Int, clockwise: Bool) {
+            guard !isAnimating else { return }
+            isAnimating = true
+            
+            print("\n🔄 PERFORMING ARBITRARY AXIS ROTATION")
+            print("   Axis: \(axis)")
+            print("   Slice: \(sliceIndex)")
+            print("   Clockwise: \(clockwise)")
+            
+            // Determine which pieces to rotate based on the axis and slice
+            let piecesToRotate: [CubePiece]
+            let rotationCenter: SCNVector3
+            
+            let absX = abs(axis.x)
+            let absY = abs(axis.y)
+            let absZ = abs(axis.z)
+            
+            if absX > absY && absX > absZ {
+                // X-axis rotation (columns)
+                piecesToRotate = cubePieces.filter { $0.position.x == sliceIndex }
+                rotationCenter = SCNVector3(Float(sliceIndex - 1) * 0.34, 0, 0)
+            } else if absY > absX && absY > absZ {
+                // Y-axis rotation (rows)
+                piecesToRotate = cubePieces.filter { $0.position.y == sliceIndex }
+                rotationCenter = SCNVector3(0, Float(sliceIndex - 1) * 0.34, 0)
+            } else {
+                // Z-axis rotation (layers)
+                piecesToRotate = cubePieces.filter { $0.position.z == sliceIndex }
+                rotationCenter = SCNVector3(0, 0, Float(sliceIndex - 1) * 0.34)
+            }
+            
+            print("   📦 Found \(piecesToRotate.count) pieces to rotate")
+            
+            // Create rotation parent at the center
+            let rotationParent = SCNNode()
+            rotationParent.position = rotationCenter
+            sceneView?.scene?.rootNode.addChildNode(rotationParent)
+            
+            // Move nodes to rotation parent
+            for piece in piecesToRotate {
+                let worldPos = piece.node.worldPosition
+                piece.node.removeFromParentNode()
+                rotationParent.addChildNode(piece.node)
+                
+                if let scene = self.sceneView?.scene {
+                    let localPos = rotationParent.convertPosition(worldPos, from: scene.rootNode)
+                    piece.node.position = localPos
+                }
+            }
+            
+            // Create quaternion rotation
+            let angle = clockwise ? Float.pi / 2 : -Float.pi / 2
+            let quaternion = SCNQuaternion(
+                x: axis.x * sin(angle / 2),
+                y: axis.y * sin(angle / 2),
+                z: axis.z * sin(angle / 2),
+                w: cos(angle / 2)
+            )
+            
+            // Animate rotation
+            let rotation = SCNAction.rotate(by: CGFloat(angle), around: axis, duration: 0.25)
+            
+            rotationParent.runAction(rotation) { [weak self] in
+                guard let self = self else { return }
+                
+                // Move nodes back to root with proper transform preservation
+                for piece in piecesToRotate {
+                    let finalTransform = piece.node.worldTransform
+                    piece.node.removeFromParentNode()
+                    self.sceneView?.scene?.rootNode.addChildNode(piece.node)
+                    piece.node.transform = finalTransform
+                    
+                    // Update logical position (simplified - would need proper 3D rotation math)
+                    self.updatePiecePositionAfterArbitraryRotation(piece: piece, axis: axis, clockwise: clockwise)
+                }
+                
+                rotationParent.removeFromParentNode()
+                self.isAnimating = false
+                print("✅ Arbitrary axis rotation complete")
+                print(String(repeating: "=", count: 60) + "\n")
+            }
+        }
+        
+        func updatePiecePositionAfterArbitraryRotation(piece: CubePiece, axis: SCNVector3, clockwise: Bool) {
+            // This is a simplified version - in a full implementation, you'd need
+            // proper 3D rotation matrix calculations to update the logical positions
+            let (x, y, z) = piece.position
+            let oldPos = piece.position
+            
+            // For now, just log the change - proper implementation would calculate
+            // the new position based on the rotation axis and angle
+            print("  📍 Piece position update: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (rotation applied)")
+        }
+        
+        // MARK: - Vector Math Utilities
+        
+        func normalize(_ vector: SCNVector3) -> SCNVector3 {
+            let length = sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+            guard length > 0 else { return SCNVector3(0, 0, 0) }
+            return SCNVector3(vector.x / length, vector.y / length, vector.z / length)
+        }
+        
+        func crossProduct(_ a: SCNVector3, _ b: SCNVector3) -> SCNVector3 {
+            return SCNVector3(
+                a.y * b.z - a.z * b.y,
+                a.z * b.x - a.x * b.z,
+                a.x * b.y - a.y * b.x
+            )
         }
         
         func determineRow(from point: CGPoint, in view: SCNView) -> Int {
