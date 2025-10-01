@@ -584,6 +584,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("❌ Rotation blocked - already animating")
                 print("🔧 Force resetting isAnimating flag")
                 isAnimating = false
+                // Try again after reset
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.rotateRow(row, clockwise: clockwise)
+                }
                 return 
             }
             isAnimating = true
@@ -669,6 +673,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("❌ Rotation blocked - already animating")
                 print("🔧 Force resetting isAnimating flag")
                 isAnimating = false
+                // Try again after reset
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.rotateColumn(column, clockwise: clockwise)
+                }
                 return 
             }
             isAnimating = true
@@ -754,6 +762,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("❌ Rotation blocked - already animating")
                 print("🔧 Force resetting isAnimating flag")
                 isAnimating = false
+                // Try again after reset
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.rotateLayer(layer, clockwise: clockwise)
+                }
                 return 
             }
             isAnimating = true
