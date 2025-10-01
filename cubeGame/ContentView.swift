@@ -577,8 +577,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func rotateRow(_ row: Int, clockwise: Bool) {
-            guard !isAnimating else { return }
+            print("🔄 rotateRow called with row: \(row), clockwise: \(clockwise)")
+            print("🔄 isAnimating: \(isAnimating)")
+            
+            guard !isAnimating else { 
+                print("❌ Rotation blocked - already animating")
+                return 
+            }
             isAnimating = true
+            print("✅ Starting row rotation animation")
             
             print("\n" + String(repeating: "=", count: 60))
             print("🔄 ROTATING ROW \(row) \(clockwise ? "CLOCKWISE (Y-axis)" : "COUNTER-CLOCKWISE (Y-axis)")")
@@ -651,8 +658,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func rotateColumn(_ column: Int, clockwise: Bool) {
-            guard !isAnimating else { return }
+            print("🔄 rotateColumn called with column: \(column), clockwise: \(clockwise)")
+            print("🔄 isAnimating: \(isAnimating)")
+            
+            guard !isAnimating else { 
+                print("❌ Rotation blocked - already animating")
+                return 
+            }
             isAnimating = true
+            print("✅ Starting column rotation animation")
             
             print("\n" + String(repeating: "=", count: 60))
             print("🔄 ROTATING COLUMN \(column) \(clockwise ? "CLOCKWISE (X-axis)" : "COUNTER-CLOCKWISE (X-axis)")")
@@ -725,8 +739,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func rotateLayer(_ layer: Int, clockwise: Bool) {
-            guard !isAnimating else { return }
+            print("🔄 rotateLayer called with layer: \(layer), clockwise: \(clockwise)")
+            print("🔄 isAnimating: \(isAnimating)")
+            
+            guard !isAnimating else { 
+                print("❌ Rotation blocked - already animating")
+                return 
+            }
             isAnimating = true
+            print("✅ Starting layer rotation animation")
             
             print("\n" + String(repeating: "=", count: 60))
             print("🔄 ROTATING LAYER \(layer) \(clockwise ? "CLOCKWISE (Z-axis)" : "COUNTER-CLOCKWISE (Z-axis)")")
