@@ -227,38 +227,52 @@ struct Interactive3DCubeView: UIViewRepresentable {
         func determineRow(from point: CGPoint, in view: SCNView) -> Int {
             let hitResults = view.hitTest(point, options: nil)
             
-            if let firstHit = hitResults.first,
-               let nodeName = firstHit.node.name,
-               nodeName.hasPrefix("cube_") {
-                let components = nodeName.components(separatedBy: "_")
-                if components.count >= 4, let y = Int(components[2]) {
-                    print("🎯 Detected row: \(y)")
-                    return y
+            print("\n🔍 DETERMINING ROW from touch at screen point: (\(point.x), \(point.y))")
+            print("   Hit test results count: \(hitResults.count)")
+            
+            if let firstHit = hitResults.first {
+                print("   First hit node: \(firstHit.node.name ?? "unnamed")")
+                print("   Hit world position: \(firstHit.worldCoordinates)")
+                
+                if let nodeName = firstHit.node.name, nodeName.hasPrefix("cube_") {
+                    let components = nodeName.components(separatedBy: "_")
+                    if components.count >= 4, let x = Int(components[1]), let y = Int(components[2]), let z = Int(components[3]) {
+                        print("   🎯 HIT CUBE at logical position: (\(x), \(y), \(z))")
+                        print("   ✅ Using row (y): \(y)")
+                        return y
+                    }
                 }
             }
             
             let normalizedY = point.y / view.bounds.height
             let row = normalizedY < 0.4 ? 0 : (normalizedY > 0.6 ? 2 : 1)
-            print("⚠️ Fallback row: \(row)")
+            print("   ⚠️ Using FALLBACK - normalized Y: \(normalizedY) → row: \(row)")
             return row
         }
         
         func determineColumn(from point: CGPoint, in view: SCNView) -> Int {
             let hitResults = view.hitTest(point, options: nil)
             
-            if let firstHit = hitResults.first,
-               let nodeName = firstHit.node.name,
-               nodeName.hasPrefix("cube_") {
-                let components = nodeName.components(separatedBy: "_")
-                if components.count >= 4, let x = Int(components[1]) {
-                    print("🎯 Detected column: \(x)")
-                    return x
+            print("\n🔍 DETERMINING COLUMN from touch at screen point: (\(point.x), \(point.y))")
+            print("   Hit test results count: \(hitResults.count)")
+            
+            if let firstHit = hitResults.first {
+                print("   First hit node: \(firstHit.node.name ?? "unnamed")")
+                print("   Hit world position: \(firstHit.worldCoordinates)")
+                
+                if let nodeName = firstHit.node.name, nodeName.hasPrefix("cube_") {
+                    let components = nodeName.components(separatedBy: "_")
+                    if components.count >= 4, let x = Int(components[1]), let y = Int(components[2]), let z = Int(components[3]) {
+                        print("   🎯 HIT CUBE at logical position: (\(x), \(y), \(z))")
+                        print("   ✅ Using column (x): \(x)")
+                        return x
+                    }
                 }
             }
             
             let normalizedX = point.x / view.bounds.width
             let col = normalizedX < 0.4 ? 0 : (normalizedX > 0.6 ? 2 : 1)
-            print("⚠️ Fallback column: \(col)")
+            print("   ⚠️ Using FALLBACK - normalized X: \(normalizedX) → column: \(col)")
             return col
         }
         
@@ -266,10 +280,18 @@ struct Interactive3DCubeView: UIViewRepresentable {
             guard !isAnimating else { return }
             isAnimating = true
             
-            print("🔄 Rotating row \(row) \(clockwise ? "clockwise" : "counter-clockwise")")
+            print("\n" + String(repeating: "=", count: 60))
+            print("🔄 ROTATING ROW \(row) \(clockwise ? "CLOCKWISE (Y-axis)" : "COUNTER-CLOCKWISE (Y-axis)")")
+            print(String(repeating: "=", count: 60))
             
             // Get pieces in this row
             let piecesInRow = cubePieces.filter { $0.position.y == row }
+            
+            print("📦 Found \(piecesInRow.count) pieces in row \(row):")
+            for piece in piecesInRow {
+                print("  - Piece at position (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                print("    World position: \(piece.node.worldPosition)")
+            }
             
             // Create rotation parent at the center of the row
             let rotationParent = SCNNode()
@@ -309,16 +331,20 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     
                     // Update logical position after rotation around Y
                     let (x, y, z) = piece.position
+                    let oldPos = piece.position
                     if clockwise {
                         piece.position = (z, y, 2 - x)
                     } else {
                         piece.position = (2 - z, y, x)
                     }
+                    print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                    print("    New world position: \(piece.node.worldPosition)")
                 }
                 
                 rotationParent.removeFromParentNode()
                 self.isAnimating = false
                 print("✅ Row rotation complete")
+                print(String(repeating: "=", count: 60) + "\n")
             }
         }
         
@@ -326,10 +352,18 @@ struct Interactive3DCubeView: UIViewRepresentable {
             guard !isAnimating else { return }
             isAnimating = true
             
-            print("🔄 Rotating column \(column) \(clockwise ? "clockwise" : "counter-clockwise")")
+            print("\n" + String(repeating: "=", count: 60))
+            print("🔄 ROTATING COLUMN \(column) \(clockwise ? "CLOCKWISE (X-axis)" : "COUNTER-CLOCKWISE (X-axis)")")
+            print(String(repeating: "=", count: 60))
             
             // Get pieces in this column
             let piecesInColumn = cubePieces.filter { $0.position.x == column }
+            
+            print("📦 Found \(piecesInColumn.count) pieces in column \(column):")
+            for piece in piecesInColumn {
+                print("  - Piece at position (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                print("    World position: \(piece.node.worldPosition)")
+            }
             
             // Create rotation parent at the center of the column
             let rotationParent = SCNNode()
@@ -369,16 +403,20 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     
                     // Update logical position after rotation around X
                     let (x, y, z) = piece.position
+                    let oldPos = piece.position
                     if clockwise {
                         piece.position = (x, 2 - z, y)
                     } else {
                         piece.position = (x, z, 2 - y)
                     }
+                    print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                    print("    New world position: \(piece.node.worldPosition)")
                 }
                 
                 rotationParent.removeFromParentNode()
                 self.isAnimating = false
                 print("✅ Column rotation complete")
+                print(String(repeating: "=", count: 60) + "\n")
             }
         }
     }
