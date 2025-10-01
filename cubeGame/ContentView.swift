@@ -316,21 +316,26 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let absY = abs(axis.y)
             let absZ = abs(axis.z)
             
+            print("   🧮 Axis components: X=\(axis.x), Y=\(axis.y), Z=\(axis.z)")
+            print("   🧮 Absolute values: X=\(absX), Y=\(absY), Z=\(absZ)")
+            
             if absX > absY && absX > absZ {
-                // Rotation around X-axis (columns)
+                // Rotation around X-axis (columns) - but we need to determine which column
+                // For X-axis rotation, we rotate around the X-axis, so we need the Y or Z coordinate
+                // Let's use the Y coordinate to determine which column slice
                 let clockwise = axis.x > 0
-                print("   🔄 X-axis rotation, slice: \(x), clockwise: \(clockwise)")
-                return (x, clockwise)
-            } else if absY > absX && absY > absZ {
-                // Rotation around Y-axis (rows)
-                let clockwise = axis.y > 0
-                print("   🔄 Y-axis rotation, slice: \(y), clockwise: \(clockwise)")
+                print("   🔄 X-axis rotation, using Y coordinate: \(y), clockwise: \(clockwise)")
                 return (y, clockwise)
+            } else if absY > absX && absY > absZ {
+                // Rotation around Y-axis (rows) - use X coordinate to determine which row slice
+                let clockwise = axis.y > 0
+                print("   🔄 Y-axis rotation, using X coordinate: \(x), clockwise: \(clockwise)")
+                return (x, clockwise)
             } else {
-                // Rotation around Z-axis (layers)
+                // Rotation around Z-axis (layers) - use Y coordinate to determine which layer slice
                 let clockwise = axis.z > 0
-                print("   🔄 Z-axis rotation, slice: \(z), clockwise: \(clockwise)")
-                return (z, clockwise)
+                print("   🔄 Z-axis rotation, using Y coordinate: \(y), clockwise: \(clockwise)")
+                return (y, clockwise)
             }
         }
         
@@ -352,17 +357,20 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let absZ = abs(axis.z)
             
             if absX > absY && absX > absZ {
-                // X-axis rotation (columns)
-                piecesToRotate = cubePieces.filter { $0.position.x == sliceIndex }
-                rotationCenter = SCNVector3(Float(sliceIndex - 1) * 0.34, 0, 0)
-            } else if absY > absX && absY > absZ {
-                // Y-axis rotation (rows)
+                // X-axis rotation - rotate around X-axis, so we rotate pieces with same Y coordinate
                 piecesToRotate = cubePieces.filter { $0.position.y == sliceIndex }
                 rotationCenter = SCNVector3(0, Float(sliceIndex - 1) * 0.34, 0)
+                print("   🔄 X-axis rotation: rotating Y-slice \(sliceIndex)")
+            } else if absY > absX && absY > absZ {
+                // Y-axis rotation - rotate around Y-axis, so we rotate pieces with same X coordinate
+                piecesToRotate = cubePieces.filter { $0.position.x == sliceIndex }
+                rotationCenter = SCNVector3(Float(sliceIndex - 1) * 0.34, 0, 0)
+                print("   🔄 Y-axis rotation: rotating X-slice \(sliceIndex)")
             } else {
-                // Z-axis rotation (layers)
-                piecesToRotate = cubePieces.filter { $0.position.z == sliceIndex }
-                rotationCenter = SCNVector3(0, 0, Float(sliceIndex - 1) * 0.34)
+                // Z-axis rotation - rotate around Z-axis, so we rotate pieces with same Y coordinate
+                piecesToRotate = cubePieces.filter { $0.position.y == sliceIndex }
+                rotationCenter = SCNVector3(0, Float(sliceIndex - 1) * 0.34, 0)
+                print("   🔄 Z-axis rotation: rotating Y-slice \(sliceIndex)")
             }
             
             print("   📦 Found \(piecesToRotate.count) pieces to rotate")
@@ -418,14 +426,38 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func updatePiecePositionAfterArbitraryRotation(piece: CubePiece, axis: SCNVector3, clockwise: Bool) {
-            // This is a simplified version - in a full implementation, you'd need
-            // proper 3D rotation matrix calculations to update the logical positions
             let (x, y, z) = piece.position
             let oldPos = piece.position
             
-            // For now, just log the change - proper implementation would calculate
-            // the new position based on the rotation axis and angle
-            print("  📍 Piece position update: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (rotation applied)")
+            // Determine which axis we're rotating around and update position accordingly
+            let absX = abs(axis.x)
+            let absY = abs(axis.y)
+            let absZ = abs(axis.z)
+            
+            if absX > absY && absX > absZ {
+                // X-axis rotation - pieces move in Y-Z plane
+                if clockwise {
+                    piece.position = (x, z, 2 - y)
+                } else {
+                    piece.position = (x, 2 - z, y)
+                }
+            } else if absY > absX && absY > absZ {
+                // Y-axis rotation - pieces move in X-Z plane
+                if clockwise {
+                    piece.position = (2 - z, y, x)
+                } else {
+                    piece.position = (z, y, 2 - x)
+                }
+            } else {
+                // Z-axis rotation - pieces move in X-Y plane
+                if clockwise {
+                    piece.position = (2 - y, x, z)
+                } else {
+                    piece.position = (y, 2 - x, z)
+                }
+            }
+            
+            print("  📍 Piece position update: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
         }
         
         // MARK: - Vector Math Utilities
