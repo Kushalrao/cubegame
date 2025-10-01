@@ -319,15 +319,17 @@ struct Interactive3DCubeView: UIViewRepresentable {
             rotationParent.runAction(rotation) { [weak self] in
                 guard let self = self else { return }
                 
-                // Move nodes back to root, preserving their rotated positions
+                // Move nodes back to root with proper transform preservation
                 for piece in piecesInRow {
-                    let worldPos = piece.node.worldPosition
-                    let worldOrientation = piece.node.worldOrientation
+                    // Get the final transform in world space
+                    let finalTransform = piece.node.worldTransform
                     
+                    // Remove from parent and add to root
                     piece.node.removeFromParentNode()
                     self.sceneView?.scene?.rootNode.addChildNode(piece.node)
-                    piece.node.position = worldPos
-                    piece.node.orientation = worldOrientation
+                    
+                    // Apply the world transform
+                    piece.node.transform = finalTransform
                     
                     // Update logical position after rotation around Y
                     let (x, y, z) = piece.position
@@ -391,15 +393,17 @@ struct Interactive3DCubeView: UIViewRepresentable {
             rotationParent.runAction(rotation) { [weak self] in
                 guard let self = self else { return }
                 
-                // Move nodes back to root, preserving their rotated positions
+                // Move nodes back to root with proper transform preservation
                 for piece in piecesInColumn {
-                    let worldPos = piece.node.worldPosition
-                    let worldOrientation = piece.node.worldOrientation
+                    // Get the final transform in world space
+                    let finalTransform = piece.node.worldTransform
                     
+                    // Remove from parent and add to root
                     piece.node.removeFromParentNode()
                     self.sceneView?.scene?.rootNode.addChildNode(piece.node)
-                    piece.node.position = worldPos
-                    piece.node.orientation = worldOrientation
+                    
+                    // Apply the world transform
+                    piece.node.transform = finalTransform
                     
                     // Update logical position after rotation around X
                     let (x, y, z) = piece.position
