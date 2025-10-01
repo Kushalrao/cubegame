@@ -292,20 +292,53 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func determineRotationAxisAndSlice(swipeDirection: SCNVector3, cameraDirection: SCNVector3, hitPiece: CubePiece) -> RotationInfo {
-            // Calculate rotation axis as cross product of swipe direction and camera direction
-            let rotationAxis = crossProduct(swipeDirection, cameraDirection)
-            let normalizedAxis = normalize(rotationAxis)
+            // For a more intuitive camera-relative rotation, we should determine the rotation axis
+            // based on which face of the cube was touched and the swipe direction
             
-            print("   🧮 Raw rotation axis: \(rotationAxis)")
-            print("   🧮 Normalized axis: \(normalizedAxis)")
+            // First, let's try a simpler approach: determine the rotation based on the swipe direction
+            // and the camera's current orientation
             
-            // Determine which slice to rotate based on the hit piece and axis
-            let (sliceIndex, clockwise) = determineSliceAndDirection(
-                axis: normalizedAxis,
-                hitPiece: hitPiece
-            )
+            let (x, y, z) = hitPiece.position
             
-            return RotationInfo(axis: normalizedAxis, sliceIndex: sliceIndex, clockwise: clockwise)
+            // Convert swipe direction to a more intuitive rotation axis
+            // The idea is: if user swipes right, rotate the slice that makes sense from camera view
+            
+            // Determine which axis the swipe is most aligned with in screen space
+            let absSwipeX = abs(swipeDirection.x)
+            let absSwipeY = abs(swipeDirection.y)
+            let absSwipeZ = abs(swipeDirection.z)
+            
+            print("   🎯 Swipe direction analysis: X=\(swipeDirection.x), Y=\(swipeDirection.y), Z=\(swipeDirection.z)")
+            
+            let rotationAxis: SCNVector3
+            let sliceIndex: Int
+            let clockwise: Bool
+            
+            if absSwipeX > absSwipeY && absSwipeX > absSwipeZ {
+                // Swipe is primarily in X direction - rotate around X axis
+                rotationAxis = SCNVector3(1, 0, 0)
+                sliceIndex = x
+                clockwise = swipeDirection.x > 0
+                print("   🔄 X-axis rotation based on swipe direction")
+            } else if absSwipeY > absSwipeX && absSwipeY > absSwipeZ {
+                // Swipe is primarily in Y direction - rotate around Y axis
+                rotationAxis = SCNVector3(0, 1, 0)
+                sliceIndex = y
+                clockwise = swipeDirection.y > 0
+                print("   🔄 Y-axis rotation based on swipe direction")
+            } else {
+                // Swipe is primarily in Z direction - rotate around Z axis
+                rotationAxis = SCNVector3(0, 0, 1)
+                sliceIndex = z
+                clockwise = swipeDirection.z > 0
+                print("   🔄 Z-axis rotation based on swipe direction")
+            }
+            
+            print("   🧮 Rotation axis: \(rotationAxis)")
+            print("   📍 Slice index: \(sliceIndex)")
+            print("   🎯 Direction: \(clockwise ? "CLOCKWISE" : "COUNTER-CLOCKWISE")")
+            
+            return RotationInfo(axis: rotationAxis, sliceIndex: sliceIndex, clockwise: clockwise)
         }
         
         func determineSliceAndDirection(axis: SCNVector3, hitPiece: CubePiece) -> (sliceIndex: Int, clockwise: Bool) {
@@ -347,10 +380,31 @@ struct Interactive3DCubeView: UIViewRepresentable {
             guard !isAnimating else { return }
             isAnimating = true
             
-            print("\n🔄 PERFORMING ARBITRARY AXIS ROTATION")
+            print("\n🔄 PERFORMING SIMPLIFIED AXIS ROTATION")
             print("   Axis: \(axis)")
             print("   Slice: \(sliceIndex)")
             print("   Clockwise: \(clockwise)")
+            
+            // Use the existing rotation functions for standard axes
+            if axis.x != 0 && axis.y == 0 && axis.z == 0 {
+                // X-axis rotation
+                print("   🔄 Using X-axis rotation function")
+                rotateColumn(sliceIndex, clockwise: clockwise)
+                return
+            } else if axis.x == 0 && axis.y != 0 && axis.z == 0 {
+                // Y-axis rotation
+                print("   🔄 Using Y-axis rotation function")
+                rotateRow(sliceIndex, clockwise: clockwise)
+                return
+            } else if axis.x == 0 && axis.y == 0 && axis.z != 0 {
+                // Z-axis rotation
+                print("   🔄 Using Z-axis rotation function")
+                rotateLayer(sliceIndex, clockwise: clockwise)
+                return
+            }
+            
+            // Fallback to arbitrary axis rotation for non-standard axes
+            print("   🔄 Using arbitrary axis rotation")
             
             // Determine which pieces to rotate based on the axis and slice
             let piecesToRotate: [CubePiece]
@@ -396,16 +450,8 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 }
             }
             
-            // Create quaternion rotation
-            let angle = clockwise ? Float.pi / 2 : -Float.pi / 2
-            let quaternion = SCNQuaternion(
-                x: axis.x * sin(angle / 2),
-                y: axis.y * sin(angle / 2),
-                z: axis.z * sin(angle / 2),
-                w: cos(angle / 2)
-            )
-            
             // Animate rotation
+            let angle = clockwise ? Float.pi / 2 : -Float.pi / 2
             let rotation = SCNAction.rotate(by: CGFloat(angle), around: axis, duration: 0.25)
             
             rotationParent.runAction(rotation) { [weak self] in
@@ -674,6 +720,80 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 rotationParent.removeFromParentNode()
                 self.isAnimating = false
                 print("✅ Column rotation complete")
+                print(String(repeating: "=", count: 60) + "\n")
+            }
+        }
+        
+        func rotateLayer(_ layer: Int, clockwise: Bool) {
+            guard !isAnimating else { return }
+            isAnimating = true
+            
+            print("\n" + String(repeating: "=", count: 60))
+            print("🔄 ROTATING LAYER \(layer) \(clockwise ? "CLOCKWISE (Z-axis)" : "COUNTER-CLOCKWISE (Z-axis)")")
+            print(String(repeating: "=", count: 60))
+            
+            // Get pieces in this layer
+            let piecesInLayer = cubePieces.filter { $0.position.z == layer }
+            
+            print("📦 Found \(piecesInLayer.count) pieces in layer \(layer):")
+            for piece in piecesInLayer {
+                print("  - Piece at position (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                print("    World position: \(piece.node.worldPosition)")
+            }
+            
+            // Create rotation parent at the center of the layer
+            let rotationParent = SCNNode()
+            let offset: Float = 0.34 // cubeSize + spacing
+            rotationParent.position = SCNVector3(0, 0, Float(layer - 1) * offset)
+            sceneView?.scene?.rootNode.addChildNode(rotationParent)
+            
+            // Move nodes to rotation parent (convert to local coordinates)
+            for piece in piecesInLayer {
+                let worldPos = piece.node.worldPosition
+                piece.node.removeFromParentNode()
+                rotationParent.addChildNode(piece.node)
+                
+                // Convert world position to local position in rotation parent
+                if let scene = self.sceneView?.scene {
+                    let localPos = rotationParent.convertPosition(worldPos, from: scene.rootNode)
+                    piece.node.position = localPos
+                }
+            }
+            
+            // Animate rotation around Z axis
+            let angle = clockwise ? Float.pi / 2 : -Float.pi / 2
+            let rotation = SCNAction.rotateBy(x: 0, y: 0, z: CGFloat(angle), duration: 0.25)
+            
+            rotationParent.runAction(rotation) { [weak self] in
+                guard let self = self else { return }
+                
+                // Move nodes back to root with proper transform preservation
+                for piece in piecesInLayer {
+                    // Get the final transform in world space
+                    let finalTransform = piece.node.worldTransform
+                    
+                    // Remove from parent and add to root
+                    piece.node.removeFromParentNode()
+                    self.sceneView?.scene?.rootNode.addChildNode(piece.node)
+                    
+                    // Apply the world transform
+                    piece.node.transform = finalTransform
+                    
+                    // Update logical position after rotation around Z
+                    let (x, y, z) = piece.position
+                    let oldPos = piece.position
+                    if clockwise {
+                        piece.position = (2 - y, x, z)
+                    } else {
+                        piece.position = (y, 2 - x, z)
+                    }
+                    print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                    print("    New world position: \(piece.node.worldPosition)")
+                }
+                
+                rotationParent.removeFromParentNode()
+                self.isAnimating = false
+                print("✅ Layer rotation complete")
                 print(String(repeating: "=", count: 60) + "\n")
             }
         }
