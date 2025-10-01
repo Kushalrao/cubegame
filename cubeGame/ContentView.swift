@@ -625,7 +625,9 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let angle = clockwise ? -Float.pi / 2 : Float.pi / 2
             let rotation = SCNAction.rotateBy(x: 0, y: CGFloat(angle), z: 0, duration: 0.25)
             
+            print("🎬 Starting rotation animation with angle: \(angle)")
             rotationParent.runAction(rotation) { [weak self] in
+                print("🎬 Rotation animation completed")
                 guard let self = self else { return }
                 
                 // Move nodes back to root with proper transform preservation
@@ -708,7 +710,9 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let angle = clockwise ? Float.pi / 2 : -Float.pi / 2
             let rotation = SCNAction.rotateBy(x: CGFloat(angle), y: 0, z: 0, duration: 0.25)
             
+            print("🎬 Starting rotation animation with angle: \(angle)")
             rotationParent.runAction(rotation) { [weak self] in
+                print("🎬 Rotation animation completed")
                 guard let self = self else { return }
                 
                 // Move nodes back to root with proper transform preservation
@@ -791,7 +795,9 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let angle = clockwise ? Float.pi / 2 : -Float.pi / 2
             let rotation = SCNAction.rotateBy(x: 0, y: 0, z: CGFloat(angle), duration: 0.25)
             
+            print("🎬 Starting rotation animation with angle: \(angle)")
             rotationParent.runAction(rotation) { [weak self] in
+                print("🎬 Rotation animation completed")
                 guard let self = self else { return }
                 
                 // Move nodes back to root with proper transform preservation
