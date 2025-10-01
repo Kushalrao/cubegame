@@ -582,6 +582,8 @@ struct Interactive3DCubeView: UIViewRepresentable {
             
             guard !isAnimating else { 
                 print("❌ Rotation blocked - already animating")
+                print("🔧 Force resetting isAnimating flag")
+                isAnimating = false
                 return 
             }
             isAnimating = true
@@ -663,6 +665,8 @@ struct Interactive3DCubeView: UIViewRepresentable {
             
             guard !isAnimating else { 
                 print("❌ Rotation blocked - already animating")
+                print("🔧 Force resetting isAnimating flag")
+                isAnimating = false
                 return 
             }
             isAnimating = true
@@ -744,6 +748,8 @@ struct Interactive3DCubeView: UIViewRepresentable {
             
             guard !isAnimating else { 
                 print("❌ Rotation blocked - already animating")
+                print("🔧 Force resetting isAnimating flag")
+                isAnimating = false
                 return 
             }
             isAnimating = true
