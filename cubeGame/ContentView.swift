@@ -271,19 +271,23 @@ struct Interactive3DCubeView: UIViewRepresentable {
             // Get pieces in this row
             let piecesInRow = cubePieces.filter { $0.position.y == row }
             
-            // Create rotation parent
+            // Create rotation parent at the center of the row
             let rotationParent = SCNNode()
+            let offset: Float = 0.34 // cubeSize + spacing
+            rotationParent.position = SCNVector3(0, Float(row - 1) * offset, 0)
             sceneView?.scene?.rootNode.addChildNode(rotationParent)
             
-            // Move nodes to rotation parent
+            // Move nodes to rotation parent (convert to local coordinates)
             for piece in piecesInRow {
-                let worldPos = piece.node.presentation.worldPosition
-                let worldOrientation = piece.node.presentation.worldOrientation
-                
+                let worldPos = piece.node.worldPosition
                 piece.node.removeFromParentNode()
                 rotationParent.addChildNode(piece.node)
-                piece.node.position = worldPos
-                piece.node.orientation = worldOrientation
+                
+                // Convert world position to local position in rotation parent
+                if let scene = self.sceneView?.scene {
+                    let localPos = rotationParent.convertPosition(worldPos, from: scene.rootNode)
+                    piece.node.position = localPos
+                }
             }
             
             // Animate rotation around Y axis
@@ -293,10 +297,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
             rotationParent.runAction(rotation) { [weak self] in
                 guard let self = self else { return }
                 
-                // Move nodes back to root and update their logical positions
+                // Move nodes back to root, preserving their rotated positions
                 for piece in piecesInRow {
-                    let worldPos = piece.node.presentation.worldPosition
-                    let worldOrientation = piece.node.presentation.worldOrientation
+                    let worldPos = piece.node.worldPosition
+                    let worldOrientation = piece.node.worldOrientation
                     
                     piece.node.removeFromParentNode()
                     self.sceneView?.scene?.rootNode.addChildNode(piece.node)
@@ -327,19 +331,23 @@ struct Interactive3DCubeView: UIViewRepresentable {
             // Get pieces in this column
             let piecesInColumn = cubePieces.filter { $0.position.x == column }
             
-            // Create rotation parent
+            // Create rotation parent at the center of the column
             let rotationParent = SCNNode()
+            let offset: Float = 0.34 // cubeSize + spacing
+            rotationParent.position = SCNVector3(Float(column - 1) * offset, 0, 0)
             sceneView?.scene?.rootNode.addChildNode(rotationParent)
             
-            // Move nodes to rotation parent
+            // Move nodes to rotation parent (convert to local coordinates)
             for piece in piecesInColumn {
-                let worldPos = piece.node.presentation.worldPosition
-                let worldOrientation = piece.node.presentation.worldOrientation
-                
+                let worldPos = piece.node.worldPosition
                 piece.node.removeFromParentNode()
                 rotationParent.addChildNode(piece.node)
-                piece.node.position = worldPos
-                piece.node.orientation = worldOrientation
+                
+                // Convert world position to local position in rotation parent
+                if let scene = self.sceneView?.scene {
+                    let localPos = rotationParent.convertPosition(worldPos, from: scene.rootNode)
+                    piece.node.position = localPos
+                }
             }
             
             // Animate rotation around X axis
@@ -349,10 +357,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
             rotationParent.runAction(rotation) { [weak self] in
                 guard let self = self else { return }
                 
-                // Move nodes back to root and update their logical positions
+                // Move nodes back to root, preserving their rotated positions
                 for piece in piecesInColumn {
-                    let worldPos = piece.node.presentation.worldPosition
-                    let worldOrientation = piece.node.presentation.worldOrientation
+                    let worldPos = piece.node.worldPosition
+                    let worldOrientation = piece.node.worldOrientation
                     
                     piece.node.removeFromParentNode()
                     self.sceneView?.scene?.rootNode.addChildNode(piece.node)
