@@ -163,10 +163,12 @@ struct Interactive3DCubeView: UIViewRepresentable {
                         
                         if rotations > lastRotations {
                             let row = determineRow(from: startLocation, in: sceneView)
+                            print("Swipe direction: \(deltaX > 0 ? "RIGHT" : "LEFT")")
+                            // Swipe RIGHT = rotate clockwise, Swipe LEFT = rotate counter-clockwise
                             if deltaX > 0 {
-                                rotateRow(row, clockwise: true)
-                            } else {
                                 rotateRow(row, clockwise: false)
+                            } else {
+                                rotateRow(row, clockwise: true)
                             }
                         }
                         lastSwipeDistance = deltaX
@@ -178,10 +180,12 @@ struct Interactive3DCubeView: UIViewRepresentable {
                         
                         if rotations > lastRotations {
                             let column = determineColumn(from: startLocation, in: sceneView)
+                            print("Swipe direction: \(deltaY > 0 ? "DOWN" : "UP")")
+                            // Swipe DOWN = rotate clockwise, Swipe UP = rotate counter-clockwise
                             if deltaY > 0 {
-                                rotateColumn(column, clockwise: true)
-                            } else {
                                 rotateColumn(column, clockwise: false)
+                            } else {
+                                rotateColumn(column, clockwise: true)
                             }
                         }
                         lastSwipeDistance = deltaY
