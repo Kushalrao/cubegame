@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SceneKit
+import UIKit
 import Combine
 
 // MARK: - Cube Piece Model
@@ -84,6 +85,14 @@ struct Interactive3DCubeView: UIViewRepresentable {
         var isSwipeGesture = false
         var currentCameraAngle: (x: Float, y: Float) = (0.3, 0.3)
         var isAnimating = false
+        var animationStartTime: Date?
+        let hapticGenerator = UIImpactFeedbackGenerator(style: .medium)
+        
+        func forceResetAnimationState() {
+            print("🔧 Force resetting animation state")
+            isAnimating = false
+            animationStartTime = nil
+        }
         
         init(cube: RubiksCube) {
             self.cube = cube
@@ -169,42 +178,72 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     let translation = gesture.translation(in: sceneView)
                     let velocity = gesture.velocity(in: sceneView)
                     
-                    // Detect gesture type based on movement pattern
-                    let distance = sqrt(cumulativeTranslation.x * cumulativeTranslation.x + 
-                                     cumulativeTranslation.y * cumulativeTranslation.y)
-                    let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-                    
-                    // Updated thresholds for better distinction
-                    let minDistanceForDrag: CGFloat = 20  // Minimum distance before drag starts
-                    let swipeVelocityThreshold: CGFloat = 500  // Higher velocity for swipe
-                    let swipeDistanceThreshold: CGFloat = 15   // Shorter distance for swipe
-                    
-                    // Only process gesture if minimum movement threshold is met
-                    if distance > minDistanceForDrag && !isSwipeGesture {
-                        // Check if this is a quick swipe
-                        if velocityMagnitude > swipeVelocityThreshold && distance > swipeDistanceThreshold {
-                            // This is a swipe - perform cube slice rotation
-                            isSwipeGesture = true
-                            performCubeSliceRotation(
-                                translation: translation,
-                                startLocation: gestureStartLocation!,
-                                in: sceneView
-                            )
-                        } else {
-                            // This is a drag - rotate entire cube
-                            rotateEntireCube(gesture: gesture, in: sceneView)
+                        // Detect gesture type based on movement pattern
+                        let distance = sqrt(cumulativeTranslation.x * cumulativeTranslation.x + 
+                                         cumulativeTranslation.y * cumulativeTranslation.y)
+                        let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+                        
+                        // Improved thresholds for better distinction
+                        let minDistanceForAction: CGFloat = 20  // Minimum distance before any action
+                        let swipeVelocityThreshold: CGFloat = 350  // Higher velocity threshold for swipe detection
+                        let swipeDistanceThreshold: CGFloat = 45   // Lower distance threshold for swipe
+                        let dragDistanceThreshold: CGFloat = 65   // Higher distance threshold for drag
+                        let extremeVelocityThreshold: CGFloat = 1000  // Only very extreme velocity = drag
+                        
+                        // Check if we should start processing gestures
+                        if distance > minDistanceForAction && !isSwipeGesture {
+                            // Multi-factor gesture analysis
+                            let isMediumVelocity = velocityMagnitude > swipeVelocityThreshold
+                            let isExtremeVelocity = velocityMagnitude > extremeVelocityThreshold
+                            let isShortDistance = distance < swipeDistanceThreshold
+                            let isMediumDistance = distance >= swipeDistanceThreshold && distance < dragDistanceThreshold
+                            let isLongDistance = distance >= dragDistanceThreshold
+                            
+                            // Decision logic:
+                            // 1. Extreme velocity (>1200px/s) = always drag (regardless of distance)
+                            // 2. Medium/high velocity + short distance = swipe
+                            // 3. Medium/high velocity + medium/long distance = drag
+                            // 4. Low velocity + long distance = drag
+                            // 5. Low velocity + short/medium distance = wait for more movement
+                            
+                            if isExtremeVelocity {
+                                // Only extremely fast movement = drag (prevents accidental swipes)
+                                rotateEntireCube(gesture: gesture, in: sceneView)
+                            } else if isMediumVelocity && isShortDistance {
+                                // Fast + short = swipe (cube slice rotation)
+                                isSwipeGesture = true
+                                
+                                // Trigger haptic feedback for swipe
+                                hapticGenerator.impactOccurred()
+                                
+                                performCubeSliceRotation(
+                                    translation: translation,
+                                    startLocation: gestureStartLocation!,
+                                    in: sceneView
+                                )
+                            } else if (isMediumVelocity && (isMediumDistance || isLongDistance)) || 
+                                      (!isMediumVelocity && isLongDistance) {
+                                // Fast + long OR slow + long = drag
+                                rotateEntireCube(gesture: gesture, in: sceneView)
+                            }
+                            // If low velocity + short/medium distance, wait for more movement
                         }
-                    }
                     
                     // Update cumulative translation
                     cumulativeTranslation.x += translation.x
                     cumulativeTranslation.y += translation.y
                 }
                 
-            case .ended, .cancelled:
-                gestureStartLocation = nil
-                cumulativeTranslation = CGPoint.zero
-                isSwipeGesture = false
+                case .ended, .cancelled:
+                    gestureStartLocation = nil
+                    cumulativeTranslation = CGPoint.zero
+                    isSwipeGesture = false
+                    
+                    // Check for stuck animations at gesture end
+                    if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
+                        print("⚠️ Gesture ended but animation still stuck, forcing reset")
+                        forceResetAnimationState()
+                    }
                 
             default:
                 break
@@ -234,7 +273,17 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func performCubeSliceRotation(translation: CGPoint, startLocation: CGPoint, in sceneView: SCNView) {
-            guard !isAnimating else { return }
+            // Check for stuck animations and reset if necessary
+            if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
+                print("⚠️ Detected stuck animation during gesture, forcing reset")
+                isAnimating = false
+                animationStartTime = nil
+            }
+            
+            guard !isAnimating else { 
+                print("❌ Rotation blocked - already animating (will retry after timeout)")
+                return 
+            }
             
             // Find hit piece at start location
             guard let hitPiece = findHitCubePiece(at: startLocation, in: sceneView) else {
@@ -276,21 +325,24 @@ struct Interactive3DCubeView: UIViewRepresentable {
         
         
         func findHitCubePiece(at point: CGPoint, in sceneView: SCNView) -> CubePiece? {
-            // Try hit testing to find the node
+            // Try multiple hit-testing approaches for better reliability
+            
+            // First attempt: Standard hit testing with more permissive options
             let options: [SCNHitTestOption: Any] = [
                 .searchMode: SCNHitTestSearchMode.all.rawValue,
                 .ignoreHiddenNodes: false,
                 .ignoreChildNodes: false,
                 .backFaceCulling: false,
                 .boundingBoxOnly: false,
-                .firstFoundOnly: true
+                .firstFoundOnly: false
             ]
             
             let hitResults = sceneView.hitTest(point, options: options)
+            print("🔍 Hit test at point: \(point), found \(hitResults.count) results")
             
-            if let firstHit = hitResults.first {
-                // Extract position from node name
-                if let nodeName = firstHit.node.name, nodeName.hasPrefix("cube_") {
+            // Try all hit results to find a cube piece
+            for hitResult in hitResults {
+                if let nodeName = hitResult.node.name, nodeName.hasPrefix("cube_") {
                     let components = nodeName.replacingOccurrences(of: "cube_", with: "").split(separator: "_")
                     if components.count == 3,
                        let x = Int(components[0]),
@@ -307,15 +359,139 @@ struct Interactive3DCubeView: UIViewRepresentable {
                             cube.faceColors[5]  // Back face - Pink
                         ]
                         
-                        let piece = CubePiece(position: (x, y, z), colors: colors, node: firstHit.node)
+                        let piece = CubePiece(position: (x, y, z), colors: colors, node: hitResult.node)
                         print("   🎯 Hit cube piece at logical position: (\(x), \(y), \(z))")
                         return piece
                     }
                 }
             }
             
-            print("   ❌ No cube piece found at touch location")
-            return nil
+            // Fallback: Try hit testing with bounding box only
+            let boundingBoxOptions: [SCNHitTestOption: Any] = [
+                .searchMode: SCNHitTestSearchMode.all.rawValue,
+                .ignoreHiddenNodes: false,
+                .ignoreChildNodes: false,
+                .backFaceCulling: false,
+                .boundingBoxOnly: true,
+                .firstFoundOnly: false
+            ]
+            
+            let boundingBoxResults = sceneView.hitTest(point, options: boundingBoxOptions)
+            print("🔍 Bounding box hit test found \(boundingBoxResults.count) results")
+            
+            for hitResult in boundingBoxResults {
+                if let nodeName = hitResult.node.name, nodeName.hasPrefix("cube_") {
+                    let components = nodeName.replacingOccurrences(of: "cube_", with: "").split(separator: "_")
+                    if components.count == 3,
+                       let x = Int(components[0]),
+                       let y = Int(components[1]),
+                       let z = Int(components[2]) {
+                        
+                        let colors: [Color] = [
+                            cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
+                            cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
+                        ]
+                        
+                        let piece = CubePiece(position: (x, y, z), colors: colors, node: hitResult.node)
+                        print("   🎯 Hit cube piece (bounding box fallback) at logical position: (\(x), \(y), \(z))")
+                        return piece
+                    }
+                }
+            }
+            
+                // Try hit testing at nearby points for better reliability
+                let nearbyPoints = [
+                    CGPoint(x: point.x - 20, y: point.y - 20),
+                    CGPoint(x: point.x + 20, y: point.y - 20),
+                    CGPoint(x: point.x - 20, y: point.y + 20),
+                    CGPoint(x: point.x + 20, y: point.y + 20),
+                    CGPoint(x: point.x, y: point.y - 20),
+                    CGPoint(x: point.x, y: point.y + 20),
+                    CGPoint(x: point.x - 20, y: point.y),
+                    CGPoint(x: point.x + 20, y: point.y),
+                    CGPoint(x: point.x - 10, y: point.y - 10),
+                    CGPoint(x: point.x + 10, y: point.y - 10),
+                    CGPoint(x: point.x - 10, y: point.y + 10),
+                    CGPoint(x: point.x + 10, y: point.y + 10)
+                ]
+                
+                for nearbyPoint in nearbyPoints {
+                    let nearbyResults = sceneView.hitTest(nearbyPoint, options: options)
+                    if !nearbyResults.isEmpty {
+                        print("   🎯 Found hit at nearby point: \(nearbyPoint)")
+                        for hitResult in nearbyResults {
+                            if let nodeName = hitResult.node.name, nodeName.hasPrefix("cube_") {
+                                let components = nodeName.replacingOccurrences(of: "cube_", with: "").split(separator: "_")
+                                if components.count == 3,
+                                   let x = Int(components[0]),
+                                   let y = Int(components[1]),
+                                   let z = Int(components[2]) {
+                                    
+                                    let colors: [Color] = [
+                                        cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
+                                        cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
+                                    ]
+                                    
+                                    let piece = CubePiece(position: (x, y, z), colors: colors, node: hitResult.node)
+                                    print("   🎯 Hit cube piece (nearby fallback) at logical position: (\(x), \(y), \(z))")
+                                    return piece
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Last resort: Find closest cube piece to touch point
+                print("   ⚠️ No direct hit found, using closest piece fallback")
+                let closestPiece = findClosestCubePiece(to: point, in: sceneView)
+                if let piece = closestPiece {
+                    let distance = sqrt(pow(Float(point.x) - sceneView.projectPoint(piece.node.worldPosition).x, 2) + 
+                                       pow(Float(point.y) - sceneView.projectPoint(piece.node.worldPosition).y, 2))
+                    if distance > 50 {
+                        print("   ⚠️ Closest piece is too far away (\(distance) pixels), ignoring gesture")
+                        return nil
+                    }
+                }
+                return closestPiece
+        }
+        
+        func findClosestCubePiece(to point: CGPoint, in sceneView: SCNView) -> CubePiece? {
+            guard let scene = sceneView.scene else { return nil }
+            
+            var closestPiece: CubePiece?
+            var closestDistance: Float = Float.greatestFiniteMagnitude
+            
+            // Check all cube nodes
+            for x in 0..<3 {
+                for y in 0..<3 {
+                    for z in 0..<3 {
+                        let nodeName = "cube_\(x)_\(y)_\(z)"
+                        if let node = scene.rootNode.childNode(withName: nodeName, recursively: true) {
+                            // Project node position to screen coordinates
+                            let screenPos = sceneView.projectPoint(node.worldPosition)
+                            let distance = sqrt(pow(Float(point.x) - screenPos.x, 2) + 
+                                             pow(Float(point.y) - screenPos.y, 2))
+                            
+                            if distance < closestDistance {
+                                closestDistance = distance
+                                
+                                let colors: [Color] = [
+                                    cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
+                                    cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
+                                ]
+                                
+                                closestPiece = CubePiece(position: (x, y, z), colors: colors, node: node)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if let piece = closestPiece {
+                print("   🎯 Closest cube piece at logical position: \(piece.position) (distance: \(closestDistance))")
+            }
+            
+            return closestPiece
         }
         
         
@@ -341,55 +517,115 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let clockwise: Bool
         }
         
-        func determineRotationAxisAndSlice(swipeDirection: SCNVector3, cameraDirection: SCNVector3, hitPiece: CubePiece) -> RotationInfo {
-            // For a more intuitive camera-relative rotation, we should determine the rotation axis
-            // based on which face of the cube was touched and the swipe direction
-            
-            // First, let's try a simpler approach: determine the rotation based on the swipe direction
-            // and the camera's current orientation
-            
-            let (x, y, z) = hitPiece.position
-            
-            // Convert swipe direction to a more intuitive rotation axis
-            // The idea is: if user swipes right, rotate the slice that makes sense from camera view
-            
-            // Determine which axis the swipe is most aligned with in screen space
-            let absSwipeX = abs(swipeDirection.x)
-            let absSwipeY = abs(swipeDirection.y)
-            let absSwipeZ = abs(swipeDirection.z)
-            
-            print("   🎯 Swipe direction analysis: X=\(swipeDirection.x), Y=\(swipeDirection.y), Z=\(swipeDirection.z)")
-            
-            let rotationAxis: SCNVector3
-            let sliceIndex: Int
-            let clockwise: Bool
-            
-            if absSwipeX > absSwipeY && absSwipeX > absSwipeZ {
-                // Swipe is primarily in X direction - rotate around X axis
+    func determineRotationAxisAndSlice(swipeDirection: SCNVector3, cameraDirection: SCNVector3, hitPiece: CubePiece) -> RotationInfo {
+        // Parse the node name to get the actual logical position
+        let nodeName = hitPiece.node.name ?? ""
+        let cleanName = nodeName.replacingOccurrences(of: "cube_", with: "")
+        let components = cleanName.split(separator: "_")
+        
+        guard components.count == 3,
+              let x = Int(components[0]),
+              let y = Int(components[1]),
+              let z = Int(components[2]) else {
+            print("❌ Failed to parse node name: \(nodeName)")
+            return RotationInfo(axis: SCNVector3(0, 1, 0), sliceIndex: 1, clockwise: true)
+        }
+        
+        print("   🎯 Parsed cube position from node: (\(x), \(y), \(z))")
+        print("   🎯 World swipe direction: X=\(swipeDirection.x), Y=\(swipeDirection.y), Z=\(swipeDirection.z)")
+        
+        // HYBRID APPROACH: Camera-relative swipe direction + Face-aware slice selection
+        
+        // Step 1: Convert world swipe direction to camera-relative screen space
+        let cameraRight = crossProduct(cameraDirection, SCNVector3(0, 1, 0))
+        let cameraUp = crossProduct(cameraRight, cameraDirection)
+        
+        // Project swipe direction onto camera's right and up vectors
+        let screenSwipeX = dotProduct(swipeDirection, normalize(cameraRight))
+        let screenSwipeY = dotProduct(swipeDirection, normalize(cameraUp))
+        
+        print("   📱 Screen-relative swipe: X=\(screenSwipeX), Y=\(screenSwipeY)")
+        
+        // Step 2: Determine which face is being touched based on CURRENT logical position
+        let isOnFrontFace = z == 2  // Front face (closest to camera)
+        let isOnBackFace = z == 0   // Back face (farthest from camera)
+        let isOnLeftFace = x == 0   // Left face
+        let isOnRightFace = x == 2  // Right face
+        let isOnTopFace = y == 2    // Top face
+        let isOnBottomFace = y == 0 // Bottom face
+        
+        print("   🎯 Face detection (current positions): Front=\(isOnFrontFace), Back=\(isOnBackFace), Left=\(isOnLeftFace), Right=\(isOnRightFace), Top=\(isOnTopFace), Bottom=\(isOnBottomFace)")
+        
+        // Step 3: Combine camera-relative direction with face-aware slice selection
+        let rotationAxis: SCNVector3
+        let sliceIndex: Int
+        let clockwise: Bool
+        
+        if isOnFrontFace || isOnBackFace {
+            // Touching front or back face - use camera-relative swipe direction
+            if abs(screenSwipeX) > abs(screenSwipeY) {
+                // Horizontal swipe = row rotation
+                rotationAxis = SCNVector3(0, 1, 0)
+                sliceIndex = y  // Use current Y position
+                clockwise = screenSwipeX < 0
+                print("   🔄 Front/Back face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+            } else {
+                // Vertical swipe = column rotation
                 rotationAxis = SCNVector3(1, 0, 0)
-                sliceIndex = x
-                clockwise = swipeDirection.x > 0
-                print("   🔄 X-axis rotation based on swipe direction")
-            } else if absSwipeY > absSwipeX && absSwipeY > absSwipeZ {
-                // Swipe is primarily in Y direction - rotate around Y axis
+                sliceIndex = x  // Use current X position
+                clockwise = screenSwipeY < 0
+                print("   🔄 Front/Back face vertical swipe: rotating column \(x) \(clockwise ? "clockwise" : "counter-clockwise")")
+            }
+        } else if isOnLeftFace || isOnRightFace {
+            // Touching left or right face - use camera-relative swipe direction
+            if abs(screenSwipeX) > abs(screenSwipeY) {
+                // Horizontal swipe = layer rotation
+                rotationAxis = SCNVector3(0, 0, 1)
+                sliceIndex = z  // Use current Z position
+                clockwise = screenSwipeX < 0
+                print("   🔄 Left/Right face horizontal swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
+            } else {
+                // Vertical swipe = row rotation
+                rotationAxis = SCNVector3(0, 1, 0)
+                sliceIndex = y  // Use current Y position
+                clockwise = screenSwipeY < 0
+                print("   🔄 Left/Right face vertical swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+            }
+        } else if isOnTopFace || isOnBottomFace {
+            // Touching top or bottom face - use camera-relative swipe direction
+            if abs(screenSwipeX) > abs(screenSwipeY) {
+                // Horizontal swipe = row rotation
+                rotationAxis = SCNVector3(0, 1, 0)
+                sliceIndex = y  // Use current Y position
+                clockwise = screenSwipeX < 0
+                print("   🔄 Top/Bottom face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+            } else {
+                // Vertical swipe = layer rotation
+                rotationAxis = SCNVector3(0, 0, 1)
+                sliceIndex = z  // Use current Z position
+                clockwise = screenSwipeY < 0
+                print("   🔄 Top/Bottom face vertical swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
+            }
+        } else {
+            // Fallback for edge pieces (shouldn't happen in a 3x3x3 cube)
+            print("   ⚠️ Edge piece detected, using fallback logic")
+            if abs(screenSwipeX) > abs(screenSwipeY) {
                 rotationAxis = SCNVector3(0, 1, 0)
                 sliceIndex = y
-                clockwise = swipeDirection.y > 0
-                print("   🔄 Y-axis rotation based on swipe direction")
+                clockwise = screenSwipeX < 0
             } else {
-                // Swipe is primarily in Z direction - rotate around Z axis
-                rotationAxis = SCNVector3(0, 0, 1)
-                sliceIndex = z
-                clockwise = swipeDirection.z > 0
-                print("   🔄 Z-axis rotation based on swipe direction")
+                rotationAxis = SCNVector3(1, 0, 0)
+                sliceIndex = x
+                clockwise = screenSwipeY < 0
             }
-            
-            print("   🧮 Rotation axis: \(rotationAxis)")
-            print("   📍 Slice index: \(sliceIndex)")
-            print("   🎯 Direction: \(clockwise ? "CLOCKWISE" : "COUNTER-CLOCKWISE")")
-            
-            return RotationInfo(axis: rotationAxis, sliceIndex: sliceIndex, clockwise: clockwise)
         }
+        
+        print("   🧮 Rotation axis: \(rotationAxis)")
+        print("   📍 Slice index: \(sliceIndex)")
+        print("   🎯 Direction: \(clockwise ? "CLOCKWISE" : "COUNTER-CLOCKWISE")")
+        
+        return RotationInfo(axis: rotationAxis, sliceIndex: sliceIndex, clockwise: clockwise)
+    }
         
         func determineSliceAndDirection(axis: SCNVector3, hitPiece: CubePiece) -> (sliceIndex: Int, clockwise: Bool) {
             let (x, y, z) = hitPiece.position
@@ -575,6 +811,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
             )
         }
         
+        func dotProduct(_ a: SCNVector3, _ b: SCNVector3) -> Float {
+            return a.x * b.x + a.y * b.y + a.z * b.z
+        }
+        
         func determineRow(from point: CGPoint, in view: SCNView) -> Int {
             let hitResults = view.hitTest(point, options: nil)
             
@@ -633,13 +873,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
         
         func rotateRow(_ row: Int, clockwise: Bool) {
             print("🔄 rotateRow called with row: \(row), clockwise: \(clockwise)")
-            print("🔄 isAnimating: \(isAnimating)")
             
-            guard !isAnimating else {
-                print("❌ Rotation blocked - already animating")
-                return 
+            // Force reset any stuck animation state
+            if isAnimating {
+                print("⚠️ Force resetting stuck animation state")
+                forceResetAnimationState()
             }
+            
             isAnimating = true
+            animationStartTime = Date()
             print("✅ Starting row rotation animation")
             
             print("\n" + String(repeating: "=", count: 60))
@@ -683,46 +925,72 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("🎬 Rotation animation completed")
                 guard let self = self else { return }
                 
-                // Move nodes back to root with proper transform preservation
-                for piece in piecesInRow {
-                    // Get the final transform in world space
-                    let finalTransform = piece.node.worldTransform
-                    
-                    // Remove from parent and add to root
-                    piece.node.removeFromParentNode()
-                    self.sceneView?.scene?.rootNode.addChildNode(piece.node)
-                    
-                    // Apply the world transform
-                    piece.node.transform = finalTransform
-                    
-                    // Update logical position after rotation around Y
-                    let (x, y, z) = piece.position
-                    let oldPos = piece.position
-                    if clockwise {
-                        piece.position = (z, y, 2 - x)
-                    } else {
-                        piece.position = (2 - z, y, x)
+                    // Move nodes back to root with clean discrete positions
+                    for piece in piecesInRow {
+                        // Get the final transform in world space
+                        let finalTransform = piece.node.worldTransform
+                        
+                        // Remove from parent and add to root
+                        piece.node.removeFromParentNode()
+                        self.sceneView?.scene?.rootNode.addChildNode(piece.node)
+                        
+                        // Apply the world transform
+                        piece.node.transform = finalTransform
+                        
+                        // Update logical position after rotation around Y
+                        let (x, y, z) = piece.position
+                        let oldPos = piece.position
+                        if clockwise {
+                            piece.position = (z, y, 2 - x)
+                        } else {
+                            piece.position = (2 - z, y, x)
+                        }
+                        
+                        // Update node name to match new logical position
+                        let newName = "cube_\(piece.position.x)_\(piece.position.y)_\(piece.position.z)"
+                        piece.node.name = newName
+                        
+                        // Reset to clean discrete world position
+                        let offset: Float = 0.34
+                        let cleanWorldPos = SCNVector3(
+                            Float(piece.position.x - 1) * offset,
+                            Float(piece.position.y - 1) * offset,
+                            Float(piece.position.z - 1) * offset
+                        )
+                        piece.node.position = cleanWorldPos
+                        
+                        print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
+                        print("  🏷️ Node name updated: \(piece.node.name ?? "unnamed")")
+                        print("    Clean world position: \(piece.node.worldPosition)")
                     }
-                    print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
-                    print("    New world position: \(piece.node.worldPosition)")
-                }
                 
                 rotationParent.removeFromParentNode()
                 self.isAnimating = false
+                self.animationStartTime = nil
                 print("✅ Row rotation complete")
                 print(String(repeating: "=", count: 60) + "\n")
+            }
+            
+            // Safety timeout - force completion if animation doesn't finish
+            let timeoutToken = UUID()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if self.isAnimating && self.animationStartTime != nil {
+                    print("⚠️ Animation safety timeout triggered, forcing completion")
+                    self.forceResetAnimationState()
+                }
             }
         }
         
         func rotateColumn(_ column: Int, clockwise: Bool) {
             print("🔄 rotateColumn called with column: \(column), clockwise: \(clockwise)")
-            print("🔄 isAnimating: \(isAnimating)")
             
-            guard !isAnimating else { 
-                print("❌ Rotation blocked - already animating")
-                return 
+            // Force reset any stuck animation state
+            if isAnimating {
+                print("⚠️ Force resetting stuck animation state")
+                forceResetAnimationState()
             }
             isAnimating = true
+            animationStartTime = Date()
             print("✅ Starting column rotation animation")
             
             print("\n" + String(repeating: "=", count: 60))
@@ -766,7 +1034,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("🎬 Rotation animation completed")
                 guard let self = self else { return }
                 
-                // Move nodes back to root with proper transform preservation
+                // Move nodes back to root with clean discrete positions
                 for piece in piecesInColumn {
                     // Get the final transform in world space
                     let finalTransform = piece.node.worldTransform
@@ -786,26 +1054,52 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     } else {
                         piece.position = (x, z, 2 - y)
                     }
+                    
+                    // Update node name to match new logical position
+                    let newName = "cube_\(piece.position.x)_\(piece.position.y)_\(piece.position.z)"
+                    piece.node.name = newName
+                    
+                    // Reset to clean discrete world position
+                    let offset: Float = 0.34
+                    let cleanWorldPos = SCNVector3(
+                        Float(piece.position.x - 1) * offset,
+                        Float(piece.position.y - 1) * offset,
+                        Float(piece.position.z - 1) * offset
+                    )
+                    piece.node.position = cleanWorldPos
+                    
                     print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
-                    print("    New world position: \(piece.node.worldPosition)")
+                    print("  🏷️ Node name updated: \(piece.node.name ?? "unnamed")")
+                    print("    Clean world position: \(piece.node.worldPosition)")
                 }
                 
                 rotationParent.removeFromParentNode()
                 self.isAnimating = false
+                self.animationStartTime = nil
                 print("✅ Column rotation complete")
                 print(String(repeating: "=", count: 60) + "\n")
+            }
+            
+            // Safety timeout - force completion if animation doesn't finish
+            let timeoutToken = UUID()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if self.isAnimating && self.animationStartTime != nil {
+                    print("⚠️ Animation safety timeout triggered, forcing completion")
+                    self.forceResetAnimationState()
+                }
             }
         }
         
         func rotateLayer(_ layer: Int, clockwise: Bool) {
             print("🔄 rotateLayer called with layer: \(layer), clockwise: \(clockwise)")
-            print("🔄 isAnimating: \(isAnimating)")
             
-            guard !isAnimating else { 
-                print("❌ Rotation blocked - already animating")
-                return 
+            // Force reset any stuck animation state
+            if isAnimating {
+                print("⚠️ Force resetting stuck animation state")
+                forceResetAnimationState()
             }
             isAnimating = true
+            animationStartTime = Date()
             print("✅ Starting layer rotation animation")
             
             print("\n" + String(repeating: "=", count: 60))
@@ -849,7 +1143,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("🎬 Rotation animation completed")
                 guard let self = self else { return }
                 
-                // Move nodes back to root with proper transform preservation
+                // Move nodes back to root with clean discrete positions
                 for piece in piecesInLayer {
                     // Get the final transform in world space
                     let finalTransform = piece.node.worldTransform
@@ -869,14 +1163,39 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     } else {
                         piece.position = (y, 2 - x, z)
                     }
+                    
+                    // Update node name to match new logical position
+                    let newName = "cube_\(piece.position.x)_\(piece.position.y)_\(piece.position.z)"
+                    piece.node.name = newName
+                    
+                    // Reset to clean discrete world position
+                    let offset: Float = 0.34
+                    let cleanWorldPos = SCNVector3(
+                        Float(piece.position.x - 1) * offset,
+                        Float(piece.position.y - 1) * offset,
+                        Float(piece.position.z - 1) * offset
+                    )
+                    piece.node.position = cleanWorldPos
+                    
                     print("  📍 Piece moved: (\(oldPos.x), \(oldPos.y), \(oldPos.z)) → (\(piece.position.x), \(piece.position.y), \(piece.position.z))")
-                    print("    New world position: \(piece.node.worldPosition)")
+                    print("  🏷️ Node name updated: \(piece.node.name ?? "unnamed")")
+                    print("    Clean world position: \(piece.node.worldPosition)")
                 }
                 
                 rotationParent.removeFromParentNode()
                 self.isAnimating = false
+                self.animationStartTime = nil
                 print("✅ Layer rotation complete")
                 print(String(repeating: "=", count: 60) + "\n")
+            }
+            
+            // Safety timeout - force completion if animation doesn't finish
+            let timeoutToken = UUID()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if self.isAnimating && self.animationStartTime != nil {
+                    print("⚠️ Animation safety timeout triggered, forcing completion")
+                    self.forceResetAnimationState()
+                }
             }
         }
     }
