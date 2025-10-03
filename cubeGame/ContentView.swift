@@ -85,19 +85,29 @@ struct Interactive3DCubeView: UIViewRepresentable {
         var cumulativeTranslation: CGPoint = CGPoint.zero
         var isSwipeGesture = false
         var gestureTypeDetermined = false
-        var isHoldMode = false
+        
+        // Continuous movement tracking
+        var lastGestureLocation: CGPoint?
+        var continuousMovementCount = 0
+        var movementPauseCount = 0
         var currentCameraAngle: (x: Float, y: Float) = (0.3, 0.3)
         var isAnimating = false
         var animationStartTime: Date?
         let hapticGenerator = UIImpactFeedbackGenerator(style: .medium)
         
-                // Hold-and-move gesture thresholds for intuitive cube manipulation
+                // Drag and swipe gesture thresholds
                 struct GestureThresholds {
                     let minSwipeVelocity: CGFloat = 400      // Minimum velocity for swipe detection
                     let maxSwipeDistance: CGFloat = 80       // Maximum distance for swipe
                     let maxSwipeDuration: TimeInterval = 0.3  // Maximum duration for swipe
-                    let holdThreshold: TimeInterval = 0.5    // Hold time to trigger cube rotation mode
+                    let minDragDistance: CGFloat = 25        // Minimum distance for drag
+                    let extremeVelocityThreshold: CGFloat = 700  // Very fast movements
                     let minDistanceForAction: CGFloat = 10   // Minimum distance to trigger any action
+                    
+                    // Continuous movement thresholds
+                    let minContinuousMovements: Int = 3      // Minimum continuous movements for drag
+                    let maxMovementPause: Int = 2            // Maximum pauses allowed for continuous movement
+                    let movementThreshold: CGFloat = 5       // Minimum movement between frames
                 }
         let thresholds = GestureThresholds()
         
@@ -111,25 +121,25 @@ struct Interactive3DCubeView: UIViewRepresentable {
             self.cube = cube
         }
         
-        func getCubePiecesInRow(_ row: Int) -> [CubePiece] {
-            var pieces: [CubePiece] = []
-            guard let scene = sceneView?.scene else { return pieces }
-            
-            for x in 0..<3 {
-                for z in 0..<3 {
-                    let nodeName = "cube_\(x)_\(row)_\(z)"
-                    if let node = scene.rootNode.childNode(withName: nodeName, recursively: true) {
-                        let colors: [Color] = [
-                            cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
-                            cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
-                        ]
-                        let piece = CubePiece(position: (x, row, z), colors: colors, node: node)
-                        pieces.append(piece)
-                    }
+    func getCubePiecesInRow(_ row: Int) -> [CubePiece] {
+        var pieces: [CubePiece] = []
+        guard let scene = sceneView?.scene else { return pieces }
+        
+        for x in 0..<3 {
+            for z in 0..<3 {
+                let nodeName = "cube_\(x)_\(row)_\(z)"
+                if let node = scene.rootNode.childNode(withName: nodeName, recursively: true) {
+                    let colors: [Color] = [
+                        cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
+                        cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
+                    ]
+                    let piece = CubePiece(position: (x, row, z), colors: colors, node: node)
+                    pieces.append(piece)
                 }
             }
-            return pieces
         }
+        return pieces
+    }
         
         func getCubePiecesInColumn(_ column: Int) -> [CubePiece] {
             var pieces: [CubePiece] = []
@@ -186,7 +196,12 @@ struct Interactive3DCubeView: UIViewRepresentable {
                         cumulativeTranslation = CGPoint.zero
                         isSwipeGesture = false
                         gestureTypeDetermined = false
-                        isHoldMode = false
+                        
+                        // Reset continuous movement tracking
+                        lastGestureLocation = location
+                        continuousMovementCount = 0
+                        movementPauseCount = 0
+                        
                         print("🎯 Gesture began at: \(location)")
                     }
                 
@@ -211,45 +226,75 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     
                     print("🔍 Gesture analysis - Distance: \(totalDistance), Velocity: \(velocityMagnitude), Duration: \(elapsedTime)")
                     
-                    // HOLD-AND-MOVE SYSTEM:
-                    // 1. If held for >0.5s, enter hold mode (cube rotation)
-                    // 2. If quick movement before hold threshold, check for swipe
+                    // CONTINUOUS MOVEMENT ANALYSIS
+                    // Track if finger is continuously moving (drag) vs quick touch (swipe)
+                    if let lastLocation = lastGestureLocation {
+                        let frameMovement = sqrt(pow(location.x - lastLocation.x, 2) + pow(location.y - lastLocation.y, 2))
+                        
+                        if frameMovement > thresholds.movementThreshold {
+                            // Significant movement detected
+                            continuousMovementCount += 1
+                            movementPauseCount = max(0, movementPauseCount - 1) // Reset pause count
+                            print("🔄 Continuous movement: \(continuousMovementCount), frame movement: \(frameMovement)")
+                        } else {
+                            // Little to no movement (pause)
+                            movementPauseCount += 1
+                            print("⏸️ Movement pause: \(movementPauseCount)")
+                        }
+                    }
+                    lastGestureLocation = location
                     
-                    if elapsedTime >= thresholds.holdThreshold {
-                        // HOLD MODE: User has held finger for >0.5s, any movement = cube rotation
-                        if !isHoldMode {
-                            print("⏰ HOLD THRESHOLD REACHED - Entering cube rotation mode")
-                            isHoldMode = true
-                        }
-                        
-                        if totalDistance > thresholds.minDistanceForAction {
-                            print("🔄 HOLD + MOVE = CUBE ROTATION")
-                            gestureTypeDetermined = true
-                            rotateEntireCube(gesture: gesture, in: sceneView)
-                        }
-                        
-                    } else {
-                        // PRE-HOLD: Check for quick swipe gestures
-                        let isQuickMovement = elapsedTime < thresholds.maxSwipeDuration
-                        let isHighVelocity = velocityMagnitude > thresholds.minSwipeVelocity
-                        let isShortDistance = totalDistance < thresholds.maxSwipeDistance
-                        
-                        if isQuickMovement && isHighVelocity && isShortDistance {
-                            // Quick swipe before hold threshold = slice rotation
-                            print("⚡ QUICK SWIPE = SLICE ROTATION")
-                            gestureTypeDetermined = true
-                            isSwipeGesture = true
-                            
-                            // Trigger haptic feedback for swipe
-                            hapticGenerator.impactOccurred()
-                            
-                            performCubeSliceRotation(
-                                translation: translation,
-                                startLocation: gestureStartLocation!,
-                                in: sceneView
-                            )
-                        }
-                        // If not a quick swipe, wait for hold threshold or more movement
+                    // DRAG AND SWIPE SYSTEM:
+                    // Analyze gesture characteristics to determine type
+                    let isQuickMovement = elapsedTime < thresholds.maxSwipeDuration
+                    let isHighVelocity = velocityMagnitude > thresholds.minSwipeVelocity
+                    let isShortDistance = totalDistance < thresholds.maxSwipeDistance
+                    let isLongDistance = totalDistance > thresholds.minDragDistance
+                    let isExtremeVelocity = velocityMagnitude > thresholds.extremeVelocityThreshold
+                    
+                    // Continuous movement analysis
+                    let isContinuousMovement = continuousMovementCount >= thresholds.minContinuousMovements
+                    let hasMinimalPauses = movementPauseCount <= thresholds.maxMovementPause
+                    
+                    // Decision logic for gesture type
+                    // PRIORITY 1: Continuous movement detection
+                    if isContinuousMovement && hasMinimalPauses {
+                        // Continuous swiping = DRAG (cube rotation)
+                        print("🔄 CONTINUOUS MOVEMENT = DRAG")
+                        gestureTypeDetermined = true
+                        rotateEntireCube(gesture: gesture, in: sceneView)
+                    } else if isExtremeVelocity && isLongDistance {
+                        // Very fast + long distance = DRAG (cube rotation)
+                        print("🚀 EXTREME VELOCITY + LONG DISTANCE = DRAG")
+                        gestureTypeDetermined = true
+                        rotateEntireCube(gesture: gesture, in: sceneView)
+                    } else if isExtremeVelocity && isShortDistance {
+                        // Very fast + short distance = SWIPE (slice rotation)
+                        print("⚡ EXTREME VELOCITY + SHORT DISTANCE = SWIPE")
+                        gestureTypeDetermined = true
+                        isSwipeGesture = true
+                        hapticGenerator.impactOccurred()
+                        performCubeSliceRotation(
+                            translation: translation,
+                            startLocation: gestureStartLocation!,
+                            in: sceneView
+                        )
+                    } else if isQuickMovement && isHighVelocity && isShortDistance {
+                        // Quick movement + high velocity + short distance = SWIPE
+                        print("⚡ QUICK SWIPE = SLICE ROTATION")
+                        gestureTypeDetermined = true
+                        isSwipeGesture = true
+                        hapticGenerator.impactOccurred()
+                        performCubeSliceRotation(
+                            translation: translation,
+                            startLocation: gestureStartLocation!,
+                            in: sceneView
+                        )
+                    } else if isLongDistance {
+                        // Long distance = DRAG (cube rotation)
+                        print("🔄 LONG DISTANCE = DRAG")
+                        gestureTypeDetermined = true
+                        rotateEntireCube(gesture: gesture, in: sceneView)
                     }
                 }
                 
@@ -260,7 +305,11 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 cumulativeTranslation = CGPoint.zero
                 isSwipeGesture = false
                 gestureTypeDetermined = false
-                isHoldMode = false
+                
+                // Reset continuous movement tracking
+                lastGestureLocation = nil
+                continuousMovementCount = 0
+                movementPauseCount = 0
                 
                 // Check for stuck animations at gesture end
                 if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
@@ -1287,8 +1336,8 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     backMat.lightingModel = .phong
                     materials.append(backMat)
                     
-                    smallCube.materials = materials
-                    scene.rootNode.addChildNode(node)
+                            smallCube.materials = materials
+                            scene.rootNode.addChildNode(node)
                 }
             }
         }
