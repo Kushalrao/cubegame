@@ -90,6 +90,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
         var lastGestureLocation: CGPoint?
         var continuousMovementCount = 0
         var movementPauseCount = 0
+        
+        // Drag rotation tracking
+        var lastDragTranslation: CGPoint = CGPoint.zero
+        var isDragGesture = false
         var currentCameraAngle: (x: Float, y: Float) = (0.3, 0.3)
         var isAnimating = false
         var animationStartTime: Date?
@@ -202,11 +206,15 @@ struct Interactive3DCubeView: UIViewRepresentable {
                         continuousMovementCount = 0
                         movementPauseCount = 0
                         
+                        // Reset drag rotation tracking
+                        lastDragTranslation = CGPoint.zero
+                        isDragGesture = false
+                        
                         print("🎯 Gesture began at: \(location)")
                     }
                 
             case .changed:
-                if touchCount == 1 && !gestureTypeDetermined {
+                if touchCount == 1 && (!gestureTypeDetermined || isDragGesture) {
                     let translation = gesture.translation(in: sceneView)
                     let velocity = gesture.velocity(in: sceneView)
                     let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
@@ -261,13 +269,13 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     if isContinuousMovement && hasMinimalPauses {
                         // Continuous swiping = DRAG (cube rotation)
                         print("🔄 CONTINUOUS MOVEMENT = DRAG")
-                        gestureTypeDetermined = true
-                        rotateEntireCube(gesture: gesture, in: sceneView)
+                        isDragGesture = true
+                        updateDragRotation(gesture: gesture, in: sceneView)
                     } else if isExtremeVelocity && isLongDistance {
                         // Very fast + long distance = DRAG (cube rotation)
                         print("🚀 EXTREME VELOCITY + LONG DISTANCE = DRAG")
-                        gestureTypeDetermined = true
-                        rotateEntireCube(gesture: gesture, in: sceneView)
+                        isDragGesture = true
+                        updateDragRotation(gesture: gesture, in: sceneView)
                     } else if isExtremeVelocity && isShortDistance {
                         // Very fast + short distance = SWIPE (slice rotation)
                         print("⚡ EXTREME VELOCITY + SHORT DISTANCE = SWIPE")
@@ -293,8 +301,12 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     } else if isLongDistance {
                         // Long distance = DRAG (cube rotation)
                         print("🔄 LONG DISTANCE = DRAG")
-                        gestureTypeDetermined = true
-                        rotateEntireCube(gesture: gesture, in: sceneView)
+                        isDragGesture = true
+                        updateDragRotation(gesture: gesture, in: sceneView)
+                    } else if isDragGesture {
+                        // Continue drag rotation if already in drag mode
+                        print("🔄 CONTINUING DRAG ROTATION")
+                        updateDragRotation(gesture: gesture, in: sceneView)
                     }
                 }
                 
@@ -306,10 +318,14 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 isSwipeGesture = false
                 gestureTypeDetermined = false
                 
-                // Reset continuous movement tracking
-                lastGestureLocation = nil
-                continuousMovementCount = 0
-                movementPauseCount = 0
+                    // Reset continuous movement tracking
+                    lastGestureLocation = nil
+                    continuousMovementCount = 0
+                    movementPauseCount = 0
+                    
+                    // Reset drag rotation tracking
+                    lastDragTranslation = CGPoint.zero
+                    isDragGesture = false
                 
                 // Check for stuck animations at gesture end
                 if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
@@ -322,15 +338,31 @@ struct Interactive3DCubeView: UIViewRepresentable {
             }
         }
         
-        func rotateEntireCube(gesture: UIPanGestureRecognizer, in view: UIView) {
-            // Rotate the entire cube by rotating camera around it
+        func updateDragRotation(gesture: UIPanGestureRecognizer, in view: UIView) {
+            // Continuous drag rotation using incremental updates
             let translation = gesture.translation(in: view)
             
-            currentCameraAngle.y += Float(translation.x) * 0.01
-            currentCameraAngle.x -= Float(translation.y) * 0.01
+            // Calculate delta from last frame
+            let deltaX = translation.x - lastDragTranslation.x
+            let deltaY = translation.y - lastDragTranslation.y
             
+            // Apply incremental rotation
+            currentCameraAngle.y += Float(deltaX) * 0.01
+            currentCameraAngle.x -= Float(deltaY) * 0.01
+            
+            // Clamp vertical rotation
             currentCameraAngle.x = max(-Float.pi/2, min(Float.pi/2, currentCameraAngle.x))
             
+            // Update camera position
+            updateCameraPosition()
+            
+            // Update tracking for next frame
+            lastDragTranslation = translation
+            
+            print("🔄 Continuous drag rotation: deltaX=\(deltaX), deltaY=\(deltaY)")
+        }
+        
+        func updateCameraPosition() {
             if let cameraNode = sceneView?.scene?.rootNode.childNode(withName: "camera", recursively: true) {
                 let distance: Float = 4.0
                 let x = distance * cos(currentCameraAngle.x) * sin(currentCameraAngle.y)
@@ -340,6 +372,18 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 cameraNode.position = SCNVector3(x, y, z)
                 cameraNode.look(at: SCNVector3(0, 0, 0))
             }
+        }
+        
+        func rotateEntireCube(gesture: UIPanGestureRecognizer, in view: UIView) {
+            // Single rotation for non-continuous drags (fallback)
+            let translation = gesture.translation(in: view)
+            
+            currentCameraAngle.y += Float(translation.x) * 0.01
+            currentCameraAngle.x -= Float(translation.y) * 0.01
+            
+            currentCameraAngle.x = max(-Float.pi/2, min(Float.pi/2, currentCameraAngle.x))
+            
+            updateCameraPosition()
             
             gesture.setTranslation(.zero, in: view)
         }
