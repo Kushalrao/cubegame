@@ -85,19 +85,19 @@ struct Interactive3DCubeView: UIViewRepresentable {
         var cumulativeTranslation: CGPoint = CGPoint.zero
         var isSwipeGesture = false
         var gestureTypeDetermined = false
+        var isHoldMode = false
         var currentCameraAngle: (x: Float, y: Float) = (0.3, 0.3)
         var isAnimating = false
         var animationStartTime: Date?
         let hapticGenerator = UIImpactFeedbackGenerator(style: .medium)
         
-                // Industry-standard gesture thresholds for 3D manipulation
+                // Hold-and-move gesture thresholds for intuitive cube manipulation
                 struct GestureThresholds {
-                    let minSwipeVelocity: CGFloat = 400      // Balanced for swipe detection
-                    let maxSwipeDistance: CGFloat = 80       // Balanced swipe range
-                    let minDragDistance: CGFloat = 25        // Raised to distinguish from swipes
-                    let maxSwipeDuration: TimeInterval = 0.3  // Balanced timing for swipes
-                    let extremeVelocityThreshold: CGFloat = 700 // Balanced extreme velocity
-                    let minDistanceForAction: CGFloat = 10   // Balanced for earlier action detection
+                    let minSwipeVelocity: CGFloat = 400      // Minimum velocity for swipe detection
+                    let maxSwipeDistance: CGFloat = 80       // Maximum distance for swipe
+                    let maxSwipeDuration: TimeInterval = 0.3  // Maximum duration for swipe
+                    let holdThreshold: TimeInterval = 0.5    // Hold time to trigger cube rotation mode
+                    let minDistanceForAction: CGFloat = 10   // Minimum distance to trigger any action
                 }
         let thresholds = GestureThresholds()
         
@@ -179,22 +179,22 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let touchCount = gesture.numberOfTouches
             
             switch gesture.state {
-            case .began:
-                if touchCount == 1 {
-                    gestureStartLocation = location
-                    gestureStartTime = Date()
-                    cumulativeTranslation = CGPoint.zero
-                    isSwipeGesture = false
-                    gestureTypeDetermined = false
-                    print("🎯 Gesture began at: \(location)")
-                }
+                case .began:
+                    if touchCount == 1 {
+                        gestureStartLocation = location
+                        gestureStartTime = Date()
+                        cumulativeTranslation = CGPoint.zero
+                        isSwipeGesture = false
+                        gestureTypeDetermined = false
+                        isHoldMode = false
+                        print("🎯 Gesture began at: \(location)")
+                    }
                 
             case .changed:
                 if touchCount == 1 && !gestureTypeDetermined {
                     let translation = gesture.translation(in: sceneView)
                     let velocity = gesture.velocity(in: sceneView)
                     let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-                    let _ = sqrt(translation.x * translation.x + translation.y * translation.y)
                     
                     // Update cumulative translation for distance tracking
                     cumulativeTranslation.x += translation.x
@@ -211,44 +211,32 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     
                     print("🔍 Gesture analysis - Distance: \(totalDistance), Velocity: \(velocityMagnitude), Duration: \(elapsedTime)")
                     
-                    // Multi-factor gesture analysis based on research findings
-                    let isQuickMovement = elapsedTime < thresholds.maxSwipeDuration
-                    let isHighVelocity = velocityMagnitude > thresholds.minSwipeVelocity
-                    let isExtremeVelocity = velocityMagnitude > thresholds.extremeVelocityThreshold
-                    let isShortDistance = totalDistance < thresholds.maxSwipeDistance
-                    let isLongDistance = totalDistance > thresholds.minDragDistance
+                    // HOLD-AND-MOVE SYSTEM:
+                    // 1. If held for >0.5s, enter hold mode (cube rotation)
+                    // 2. If quick movement before hold threshold, check for swipe
                     
-                    // Decision logic based on industry best practices:
-                    // 1. Very fast + long distance = drag (cube rotation)
-                    // 2. Very fast + short distance = swipe (quick flick)
-                    // 3. Quick + high velocity + short distance = swipe (slice rotation)
-                    // 4. Long distance = drag (cube rotation)
-                    // 5. Wait for more movement if ambiguous
-                    
-                    if isExtremeVelocity && isLongDistance {
-                        // Very fast + long movement = Drag (cube rotation)
-                        print("🚀 EXTREME VELOCITY + LONG DISTANCE = DRAG")
-                        gestureTypeDetermined = true
-                        rotateEntireCube(gesture: gesture, in: sceneView)
+                    if elapsedTime >= thresholds.holdThreshold {
+                        // HOLD MODE: User has held finger for >0.5s, any movement = cube rotation
+                        if !isHoldMode {
+                            print("⏰ HOLD THRESHOLD REACHED - Entering cube rotation mode")
+                            isHoldMode = true
+                        }
                         
-                    } else if isExtremeVelocity && isShortDistance {
-                        // Very fast + short = Swipe (slice rotation) - quick flick
-                        print("⚡ EXTREME VELOCITY + SHORT = SWIPE (Quick Flick)")
-                        gestureTypeDetermined = true
-                        isSwipeGesture = true
+                        if totalDistance > thresholds.minDistanceForAction {
+                            print("🔄 HOLD + MOVE = CUBE ROTATION")
+                            gestureTypeDetermined = true
+                            rotateEntireCube(gesture: gesture, in: sceneView)
+                        }
                         
-                        // Trigger haptic feedback for swipe
-                        hapticGenerator.impactOccurred()
+                    } else {
+                        // PRE-HOLD: Check for quick swipe gestures
+                        let isQuickMovement = elapsedTime < thresholds.maxSwipeDuration
+                        let isHighVelocity = velocityMagnitude > thresholds.minSwipeVelocity
+                        let isShortDistance = totalDistance < thresholds.maxSwipeDistance
                         
-                        performCubeSliceRotation(
-                            translation: translation,
-                            startLocation: gestureStartLocation!,
-                            in: sceneView
-                        )
-                        
-                        } else if isQuickMovement && isHighVelocity && isShortDistance {
-                            // Quick + fast + short = Swipe (slice rotation)
-                            print("⚡ QUICK + FAST + SHORT = SWIPE")
+                        if isQuickMovement && isHighVelocity && isShortDistance {
+                            // Quick swipe before hold threshold = slice rotation
+                            print("⚡ QUICK SWIPE = SLICE ROTATION")
                             gestureTypeDetermined = true
                             isSwipeGesture = true
                             
@@ -260,14 +248,9 @@ struct Interactive3DCubeView: UIViewRepresentable {
                                 startLocation: gestureStartLocation!,
                                 in: sceneView
                             )
-                        
-                    } else if isLongDistance {
-                        // Long distance = Drag (cube rotation) - easier to trigger
-                        print("📏 LONG DISTANCE = DRAG")
-                        gestureTypeDetermined = true
-                        rotateEntireCube(gesture: gesture, in: sceneView)
+                        }
+                        // If not a quick swipe, wait for hold threshold or more movement
                     }
-                    // If ambiguous, wait for more movement or time
                 }
                 
             case .ended, .cancelled:
@@ -277,6 +260,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 cumulativeTranslation = CGPoint.zero
                 isSwipeGesture = false
                 gestureTypeDetermined = false
+                isHoldMode = false
                 
                 // Check for stuck animations at gesture end
                 if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
