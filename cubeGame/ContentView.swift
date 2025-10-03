@@ -27,7 +27,7 @@ class CubePiece {
 class RubiksCube: ObservableObject {
     var pieces: [CubePiece] = []
     
-    let faceColors: [Color] = [.blue, .green, .red, .yellow, .orange, .pink]
+    let faceColors: [Color] = [.blue, .green, .red, .yellow, .orange, .white]
     
     init() {
         resetCube()
@@ -119,6 +119,175 @@ struct Interactive3DCubeView: UIViewRepresentable {
             print("🔧 Force resetting animation state")
             isAnimating = false
             animationStartTime = nil
+        }
+        
+        func performAutoShuffle() {
+            print("🎲 Starting auto-shuffle animation")
+            
+            // First move camera closer (like drag interaction)
+            moveCameraCloser()
+            
+            // Wait for camera movement to complete, then start rotation and swipes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // Start independent slow cube rotation (90 degrees over 4 seconds)
+                self.startIndependentCubeRotation()
+                
+                // Generate and execute swipe gestures
+                let swipeGestures = self.generatePlannedSwipeGestures(count: 20)
+                
+                // Execute swipe gestures with delays - wait for each animation to complete
+                for (index, gesture) in swipeGestures.enumerated() {
+                    let delay = Double(index) * 0.1 // 0.1 seconds between moves
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        self.executeAutoSwipe(gesture)
+                    }
+                }
+            }
+        }
+        
+        func generatePlannedSwipeGestures(count: Int) -> [(location: CGPoint, direction: CGPoint)] {
+            var gestures: [(location: CGPoint, direction: CGPoint)] = []
+            
+            // Pre-planned sequence to avoid overlaps and ensure proper shuffling
+            let plannedMoves: [(slice: Int, axis: String, direction: String)] = [
+                (0, "row", "right"),    // Top row right
+                (1, "column", "up"),    // Middle column up
+                (2, "row", "left"),     // Bottom row left
+                (0, "column", "down"),  // Left column down
+                (1, "row", "right"),    // Middle row right
+                (2, "column", "up"),    // Right column up
+                (0, "row", "left"),     // Top row left
+                (1, "column", "down"),  // Middle column down
+                (2, "row", "right"),    // Bottom row right
+                (0, "column", "up"),    // Left column up
+                (1, "row", "left"),     // Middle row left
+                (2, "column", "down"),  // Right column down
+                (0, "row", "right"),    // Top row right
+                (1, "column", "up"),    // Middle column up
+                (2, "row", "left"),     // Bottom row left
+                (0, "column", "down"),  // Left column down
+                (1, "row", "right"),    // Middle row right
+                (2, "column", "up"),    // Right column up
+                (0, "row", "left"),     // Top row left
+                (1, "column", "down")   // Middle column down
+            ]
+            
+            for i in 0..<min(count, plannedMoves.count) {
+                let move = plannedMoves[i]
+                
+                // Calculate location based on slice and axis
+                let location: CGPoint
+                let direction: CGPoint
+                
+                switch move.axis {
+                case "row":
+                    // Row moves - horizontal swipes
+                    location = CGPoint(
+                        x: CGFloat.random(in: 180...220),
+                        y: CGFloat(400 + move.slice * 100) // Different Y for each row
+                    )
+                    direction = move.direction == "right" ? 
+                        CGPoint(x: 50, y: 0) : CGPoint(x: -50, y: 0)
+                        
+                case "column":
+                    // Column moves - vertical swipes
+                    location = CGPoint(
+                        x: CGFloat(180 + move.slice * 100), // Different X for each column
+                        y: CGFloat.random(in: 450...550)
+                    )
+                    direction = move.direction == "up" ? 
+                        CGPoint(x: 0, y: -50) : CGPoint(x: 0, y: 50)
+                        
+                default:
+                    // Fallback
+                    location = CGPoint(x: 200, y: 500)
+                    direction = CGPoint(x: 50, y: 0)
+                }
+                
+                gestures.append((location: location, direction: direction))
+            }
+            
+            return gestures
+        }
+        
+        func executeAutoSwipe(_ gesture: (location: CGPoint, direction: CGPoint)) {
+            print("🎬 Auto-swipe: from \(gesture.location) direction \(gesture.direction)")
+            
+            // Add haptic feedback for auto-swipes
+            hapticGenerator.impactOccurred()
+            
+            // Simulate a swipe gesture by calling performCubeSliceRotation directly
+            // This bypasses gesture detection and goes straight to rotation logic
+            performCubeSliceRotation(
+                translation: gesture.direction,
+                startLocation: gesture.location,
+                in: sceneView!
+            )
+        }
+        
+        func moveCameraCloser() {
+            guard let sceneView = sceneView else { 
+                print("⚠️ Scene view is nil during camera movement")
+                return 
+            }
+            
+            print("🎬 Moving camera closer for auto-swipe")
+            
+            // Move camera closer (similar to drag interaction effect)
+            if let cameraNode = sceneView.scene?.rootNode.childNode(withName: "camera", recursively: true) {
+                let closerPosition = SCNVector3(x: 1.5, y: 1.5, z: 3.0) // Closer than initial (2,2,4)
+                let cameraMove = SCNAction.move(to: closerPosition, duration: 0.5)
+                
+                cameraNode.runAction(cameraMove) {
+                    print("🎬 Camera moved closer - cube appears larger")
+                }
+            }
+        }
+        
+        func startIndependentCubeRotation() {
+            print("🎬 Starting independent cube rotation (90 degrees over 4 seconds)")
+            
+            // Use smooth camera position updates with consistent zoomed distance
+            guard let sceneView = sceneView else { 
+                print("⚠️ Scene view is nil during cube rotation")
+                return 
+            }
+            
+            if let cameraNode = sceneView.scene?.rootNode.childNode(withName: "camera", recursively: true) {
+                // Use consistent zoomed-in distance (same as moveCameraCloser)
+                let consistentDistance: Float = sqrt(1.5 * 1.5 + 1.5 * 1.5 + 3.0 * 3.0) // ≈ 3.7
+                let consistentHeight: Float = 1.5 // Same Y as moveCameraCloser
+                
+                // Create smooth orbit animation
+                let totalRotation: Float = Float.pi / 2 // 90 degrees
+                let duration: TimeInterval = 4.0
+                let steps = 60 // 60 steps over 4 seconds for smooth animation
+                let stepDuration = duration / Double(steps)
+                let rotationPerStep = totalRotation / Float(steps)
+                
+                // Start the orbit animation
+                for i in 0..<steps {
+                    let delay = Double(i) * stepDuration
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        let currentAngle = Float(i) * rotationPerStep
+                        
+                        // Calculate new position using consistent zoomed distance
+                        let x = consistentDistance * cos(consistentHeight / consistentDistance) * sin(currentAngle)
+                        let y = consistentHeight // Keep consistent height
+                        let z = consistentDistance * cos(consistentHeight / consistentDistance) * cos(currentAngle)
+                        
+                        cameraNode.position = SCNVector3(x, y, z)
+                        cameraNode.look(at: SCNVector3(0, 0, 0))
+                    }
+                }
+                
+                // Completion callback
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+                    print("🎬 Independent cube rotation completed")
+                }
+            }
         }
         
         init(cube: RubiksCube) {
@@ -472,7 +641,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
                             cube.faceColors[4], // Top face - Orange
                             cube.faceColors[2], // Bottom face - Red
                             cube.faceColors[0], // Front face - Blue
-                            cube.faceColors[5]  // Back face - Pink
+                            cube.faceColors[5]  // Back face - White
                         ]
                         
                         let piece = CubePiece(position: (x, y, z), colors: colors, node: hitResult.node)
@@ -1374,7 +1543,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     frontMat.lightingModel = .phong
                     materials.append(frontMat)
                     
-                    // Back (-Z) - Pink (faceColors[5])
+                    // Back (-Z) - White (faceColors[5])
                     let backMat = SCNMaterial()
                     backMat.diffuse.contents = UIColor(faceColors[5])
                     backMat.lightingModel = .phong
@@ -1407,6 +1576,11 @@ struct Interactive3DCubeView: UIViewRepresentable {
         cameraNode.position = SCNVector3(x: 2, y: 2, z: 4)
         cameraNode.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(cameraNode)
+        
+        // Start auto-shuffle animation after cube is fully loaded
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            context.coordinator.performAutoShuffle()
+        }
         
         return scene
     }

@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "125"
             endingLineNumber = "125"
-            landmarkName = "init(cube:)"
+            landmarkName = "performAutoShuffle()"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
