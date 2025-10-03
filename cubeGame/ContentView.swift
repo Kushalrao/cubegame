@@ -81,12 +81,25 @@ struct Interactive3DCubeView: UIViewRepresentable {
         var cube: RubiksCube
         weak var sceneView: SCNView?
         var gestureStartLocation: CGPoint?
+        var gestureStartTime: Date?
         var cumulativeTranslation: CGPoint = CGPoint.zero
         var isSwipeGesture = false
+        var gestureTypeDetermined = false
         var currentCameraAngle: (x: Float, y: Float) = (0.3, 0.3)
         var isAnimating = false
         var animationStartTime: Date?
         let hapticGenerator = UIImpactFeedbackGenerator(style: .medium)
+        
+                // Industry-standard gesture thresholds for 3D manipulation
+                struct GestureThresholds {
+                    let minSwipeVelocity: CGFloat = 400      // Balanced for swipe detection
+                    let maxSwipeDistance: CGFloat = 80       // Balanced swipe range
+                    let minDragDistance: CGFloat = 25        // Raised to distinguish from swipes
+                    let maxSwipeDuration: TimeInterval = 0.3  // Balanced timing for swipes
+                    let extremeVelocityThreshold: CGFloat = 700 // Balanced extreme velocity
+                    let minDistanceForAction: CGFloat = 10   // Balanced for earlier action detection
+                }
+        let thresholds = GestureThresholds()
         
         func forceResetAnimationState() {
             print("🔧 Force resetting animation state")
@@ -169,81 +182,107 @@ struct Interactive3DCubeView: UIViewRepresentable {
             case .began:
                 if touchCount == 1 {
                     gestureStartLocation = location
+                    gestureStartTime = Date()
                     cumulativeTranslation = CGPoint.zero
                     isSwipeGesture = false
+                    gestureTypeDetermined = false
+                    print("🎯 Gesture began at: \(location)")
                 }
                 
             case .changed:
-                if touchCount == 1 {
+                if touchCount == 1 && !gestureTypeDetermined {
                     let translation = gesture.translation(in: sceneView)
                     let velocity = gesture.velocity(in: sceneView)
+                    let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+                    let _ = sqrt(translation.x * translation.x + translation.y * translation.y)
                     
-                        // Detect gesture type based on movement pattern
-                        let distance = sqrt(cumulativeTranslation.x * cumulativeTranslation.x + 
-                                         cumulativeTranslation.y * cumulativeTranslation.y)
-                        let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-                        
-                        // Improved thresholds for better distinction
-                        let minDistanceForAction: CGFloat = 20  // Minimum distance before any action
-                        let swipeVelocityThreshold: CGFloat = 350  // Higher velocity threshold for swipe detection
-                        let swipeDistanceThreshold: CGFloat = 45   // Lower distance threshold for swipe
-                        let dragDistanceThreshold: CGFloat = 65   // Higher distance threshold for drag
-                        let extremeVelocityThreshold: CGFloat = 1000  // Only very extreme velocity = drag
-                        
-                        // Check if we should start processing gestures
-                        if distance > minDistanceForAction && !isSwipeGesture {
-                            // Multi-factor gesture analysis
-                            let isMediumVelocity = velocityMagnitude > swipeVelocityThreshold
-                            let isExtremeVelocity = velocityMagnitude > extremeVelocityThreshold
-                            let isShortDistance = distance < swipeDistanceThreshold
-                            let isMediumDistance = distance >= swipeDistanceThreshold && distance < dragDistanceThreshold
-                            let isLongDistance = distance >= dragDistanceThreshold
-                            
-                            // Decision logic:
-                            // 1. Extreme velocity (>1200px/s) = always drag (regardless of distance)
-                            // 2. Medium/high velocity + short distance = swipe
-                            // 3. Medium/high velocity + medium/long distance = drag
-                            // 4. Low velocity + long distance = drag
-                            // 5. Low velocity + short/medium distance = wait for more movement
-                            
-                            if isExtremeVelocity {
-                                // Only extremely fast movement = drag (prevents accidental swipes)
-                                rotateEntireCube(gesture: gesture, in: sceneView)
-                            } else if isMediumVelocity && isShortDistance {
-                                // Fast + short = swipe (cube slice rotation)
-                                isSwipeGesture = true
-                                
-                                // Trigger haptic feedback for swipe
-                                hapticGenerator.impactOccurred()
-                                
-                                performCubeSliceRotation(
-                                    translation: translation,
-                                    startLocation: gestureStartLocation!,
-                                    in: sceneView
-                                )
-                            } else if (isMediumVelocity && (isMediumDistance || isLongDistance)) || 
-                                      (!isMediumVelocity && isLongDistance) {
-                                // Fast + long OR slow + long = drag
-                                rotateEntireCube(gesture: gesture, in: sceneView)
-                            }
-                            // If low velocity + short/medium distance, wait for more movement
-                        }
-                    
-                    // Update cumulative translation
+                    // Update cumulative translation for distance tracking
                     cumulativeTranslation.x += translation.x
                     cumulativeTranslation.y += translation.y
+                    let totalDistance = sqrt(cumulativeTranslation.x * cumulativeTranslation.x + 
+                                           cumulativeTranslation.y * cumulativeTranslation.y)
+                    
+                    // Check if we have enough movement to analyze
+                    guard totalDistance > thresholds.minDistanceForAction else { return }
+                    
+                    // Temporal analysis - check gesture duration
+                    let duration = gestureStartTime?.timeIntervalSinceNow ?? 0
+                    let elapsedTime = abs(duration)
+                    
+                    print("🔍 Gesture analysis - Distance: \(totalDistance), Velocity: \(velocityMagnitude), Duration: \(elapsedTime)")
+                    
+                    // Multi-factor gesture analysis based on research findings
+                    let isQuickMovement = elapsedTime < thresholds.maxSwipeDuration
+                    let isHighVelocity = velocityMagnitude > thresholds.minSwipeVelocity
+                    let isExtremeVelocity = velocityMagnitude > thresholds.extremeVelocityThreshold
+                    let isShortDistance = totalDistance < thresholds.maxSwipeDistance
+                    let isLongDistance = totalDistance > thresholds.minDragDistance
+                    
+                    // Decision logic based on industry best practices:
+                    // 1. Very fast + long distance = drag (cube rotation)
+                    // 2. Very fast + short distance = swipe (quick flick)
+                    // 3. Quick + high velocity + short distance = swipe (slice rotation)
+                    // 4. Long distance = drag (cube rotation)
+                    // 5. Wait for more movement if ambiguous
+                    
+                    if isExtremeVelocity && isLongDistance {
+                        // Very fast + long movement = Drag (cube rotation)
+                        print("🚀 EXTREME VELOCITY + LONG DISTANCE = DRAG")
+                        gestureTypeDetermined = true
+                        rotateEntireCube(gesture: gesture, in: sceneView)
+                        
+                    } else if isExtremeVelocity && isShortDistance {
+                        // Very fast + short = Swipe (slice rotation) - quick flick
+                        print("⚡ EXTREME VELOCITY + SHORT = SWIPE (Quick Flick)")
+                        gestureTypeDetermined = true
+                        isSwipeGesture = true
+                        
+                        // Trigger haptic feedback for swipe
+                        hapticGenerator.impactOccurred()
+                        
+                        performCubeSliceRotation(
+                            translation: translation,
+                            startLocation: gestureStartLocation!,
+                            in: sceneView
+                        )
+                        
+                        } else if isQuickMovement && isHighVelocity && isShortDistance {
+                            // Quick + fast + short = Swipe (slice rotation)
+                            print("⚡ QUICK + FAST + SHORT = SWIPE")
+                            gestureTypeDetermined = true
+                            isSwipeGesture = true
+                            
+                            // Trigger haptic feedback for swipe
+                            hapticGenerator.impactOccurred()
+                            
+                            performCubeSliceRotation(
+                                translation: translation,
+                                startLocation: gestureStartLocation!,
+                                in: sceneView
+                            )
+                        
+                    } else if isLongDistance {
+                        // Long distance = Drag (cube rotation) - easier to trigger
+                        print("📏 LONG DISTANCE = DRAG")
+                        gestureTypeDetermined = true
+                        rotateEntireCube(gesture: gesture, in: sceneView)
+                    }
+                    // If ambiguous, wait for more movement or time
                 }
                 
-                case .ended, .cancelled:
-                    gestureStartLocation = nil
-                    cumulativeTranslation = CGPoint.zero
-                    isSwipeGesture = false
-                    
-                    // Check for stuck animations at gesture end
-                    if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
-                        print("⚠️ Gesture ended but animation still stuck, forcing reset")
-                        forceResetAnimationState()
-                    }
+            case .ended, .cancelled:
+                print("🏁 Gesture ended")
+                gestureStartLocation = nil
+                gestureStartTime = nil
+                cumulativeTranslation = CGPoint.zero
+                isSwipeGesture = false
+                gestureTypeDetermined = false
+                
+                // Check for stuck animations at gesture end
+                if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
+                    print("⚠️ Gesture ended but animation still stuck, forcing reset")
+                    forceResetAnimationState()
+                }
                 
             default:
                 break
@@ -561,34 +600,34 @@ struct Interactive3DCubeView: UIViewRepresentable {
         let sliceIndex: Int
         let clockwise: Bool
         
-        if isOnFrontFace || isOnBackFace {
-            // Touching front or back face - use camera-relative swipe direction
-            if abs(screenSwipeX) > abs(screenSwipeY) {
-                // Horizontal swipe = row rotation
-                rotationAxis = SCNVector3(0, 1, 0)
-                sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeX < 0
-                print("   🔄 Front/Back face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
-            } else {
-                // Vertical swipe = column rotation
-                rotationAxis = SCNVector3(1, 0, 0)
-                sliceIndex = x  // Use current X position
-                clockwise = screenSwipeY < 0
-                print("   🔄 Front/Back face vertical swipe: rotating column \(x) \(clockwise ? "clockwise" : "counter-clockwise")")
-            }
+                    if isOnFrontFace || isOnBackFace {
+                        // Touching front or back face - use camera-relative swipe direction
+                        if abs(screenSwipeX) > abs(screenSwipeY) {
+                            // Horizontal swipe = row rotation
+                            rotationAxis = SCNVector3(0, 1, 0)
+                            sliceIndex = y  // Use current Y position
+                            clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
+                            print("   🔄 Front/Back face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+                        } else {
+                            // Vertical swipe = column rotation
+                            rotationAxis = SCNVector3(1, 0, 0)
+                            sliceIndex = x  // Use current X position
+                            clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
+                            print("   🔄 Front/Back face vertical swipe: rotating column \(x) \(clockwise ? "clockwise" : "counter-clockwise")")
+                        }
         } else if isOnLeftFace || isOnRightFace {
             // Touching left or right face - use camera-relative swipe direction
             if abs(screenSwipeX) > abs(screenSwipeY) {
                 // Horizontal swipe = layer rotation
                 rotationAxis = SCNVector3(0, 0, 1)
                 sliceIndex = z  // Use current Z position
-                clockwise = screenSwipeX < 0
+                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
                 print("   🔄 Left/Right face horizontal swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
             } else {
                 // Vertical swipe = row rotation
                 rotationAxis = SCNVector3(0, 1, 0)
                 sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeY < 0
+                clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
                 print("   🔄 Left/Right face vertical swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
             }
         } else if isOnTopFace || isOnBottomFace {
@@ -597,13 +636,13 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 // Horizontal swipe = row rotation
                 rotationAxis = SCNVector3(0, 1, 0)
                 sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeX < 0
+                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
                 print("   🔄 Top/Bottom face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
             } else {
                 // Vertical swipe = layer rotation
                 rotationAxis = SCNVector3(0, 0, 1)
                 sliceIndex = z  // Use current Z position
-                clockwise = screenSwipeY < 0
+                clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
                 print("   🔄 Top/Bottom face vertical swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
             }
         } else {
@@ -612,11 +651,11 @@ struct Interactive3DCubeView: UIViewRepresentable {
             if abs(screenSwipeX) > abs(screenSwipeY) {
                 rotationAxis = SCNVector3(0, 1, 0)
                 sliceIndex = y
-                clockwise = screenSwipeX < 0
+                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
             } else {
                 rotationAxis = SCNVector3(1, 0, 0)
                 sliceIndex = x
-                clockwise = screenSwipeY < 0
+                clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
             }
         }
         
