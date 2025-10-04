@@ -819,114 +819,284 @@ struct Interactive3DCubeView: UIViewRepresentable {
         print("   🎯 Parsed cube position from node: (\(x), \(y), \(z))")
         print("   🎯 World swipe direction: X=\(swipeDirection.x), Y=\(swipeDirection.y), Z=\(swipeDirection.z)")
         
-        // HYBRID APPROACH: Camera-relative swipe direction + Face-aware slice selection
+        // NEW APPROACH: 3D Visibility-Aware Rotation System
         
-        // Step 1: Convert world swipe direction to camera-relative screen space
+        // Step 1: Calculate face visibility from current camera angle
+        guard let sceneView = sceneView,
+              let cameraNode = sceneView.scene?.rootNode.childNode(withName: "camera", recursively: true) else {
+            print("❌ Camera node not found, using fallback")
+            return fallbackRotation(x: x, y: y, z: z, swipeDirection: swipeDirection, cameraDirection: cameraDirection)
+        }
+        
+        let faceVisibilities = calculateFaceVisibility(cameraNode: cameraNode)
+        let visibleFaces = getVisibleFacesSorted(faceVisibilities: faceVisibilities)
+        
+        guard let dominantFace = findDominantFace(faceVisibilities: faceVisibilities) else {
+            print("❌ No dominant face found, using fallback")
+            return fallbackRotation(x: x, y: y, z: z, swipeDirection: swipeDirection, cameraDirection: cameraDirection)
+        }
+        
+        print("   👁️ Visible faces (sorted): \(visibleFaces.map { $0.rawValue })")
+        print("   🎯 Dominant face: \(dominantFace.rawValue)")
+        
+        // Step 2: Determine which face(s) the hit piece is on
+        let pieceFaces = determinePieceFaces(x: x, y: y, z: z)
+        print("   📍 Hit piece is on faces: \(pieceFaces.map { $0.rawValue })")
+        
+        // Step 3: Find the touch face - prioritize the dominant face if piece is on it
+        let touchFace = pieceFaces.contains(dominantFace) ? dominantFace : pieceFaces.first ?? dominantFace
+        print("   👆 Touch face (primary interaction): \(touchFace.rawValue)")
+        
+        // Step 4: Convert swipe to camera-relative screen space
         let cameraRight = crossProduct(cameraDirection, SCNVector3(0, 1, 0))
         let cameraUp = crossProduct(cameraRight, cameraDirection)
-        
-        // Project swipe direction onto camera's right and up vectors
         let screenSwipeX = dotProduct(swipeDirection, normalize(cameraRight))
         let screenSwipeY = dotProduct(swipeDirection, normalize(cameraUp))
         
         print("   📱 Screen-relative swipe: X=\(screenSwipeX), Y=\(screenSwipeY)")
         
-        // Step 2: Determine which face is being touched based on CURRENT logical position
-        // For a 3x3x3 cube, pieces can be on multiple faces (edges and corners)
-        // We need to determine the PRIMARY face being touched based on camera angle
+        // Step 5: Apply "NEVER ROTATE THE VISIBLE FACE ITSELF" rule
+        // Get the forbidden axis (perpendicular to dominant face)
+        let forbiddenAxis = dominantFace.perpendicularAxis
+        print("   🚫 Forbidden axis (perpendicular to dominant face): \(forbiddenAxis)")
         
-        let isOnFrontFace = z == 2  // Front face (closest to camera)
-        let isOnBackFace = z == 0   // Back face (farthest from camera)
-        let isOnLeftFace = x == 0   // Left face
-        let isOnRightFace = x == 2  // Right face
-        let isOnTopFace = y == 2    // Top face
-        let isOnBottomFace = y == 0 // Bottom face
+        // Step 6: Determine rotation based on touch face and swipe direction
+        // IMPORTANT: Never rotate around the forbidden axis
+        let rotationInfo = determineAllowedRotation(
+            touchFace: touchFace,
+            dominantFace: dominantFace,
+            forbiddenAxis: forbiddenAxis,
+            screenSwipeX: screenSwipeX,
+            screenSwipeY: screenSwipeY,
+            hitPosition: (x, y, z),
+            faceVisibilities: faceVisibilities
+        )
         
-        // Determine the PRIMARY face based on which faces the piece is on
-        // Priority: Front/Back > Left/Right > Top/Bottom (based on typical camera angle)
-        let primaryFace: String
-        if isOnFrontFace || isOnBackFace {
-            primaryFace = isOnFrontFace ? "Front" : "Back"
-        } else if isOnLeftFace || isOnRightFace {
-            primaryFace = isOnLeftFace ? "Left" : "Right"
-        } else if isOnTopFace || isOnBottomFace {
-            primaryFace = isOnTopFace ? "Top" : "Bottom"
-        } else {
-            primaryFace = "Unknown"
-        }
+        print("   🧮 Rotation axis: \(rotationInfo.axis)")
+        print("   📍 Slice index: \(rotationInfo.sliceIndex)")
+        print("   🎯 Direction: \(rotationInfo.clockwise ? "CLOCKWISE" : "COUNTER-CLOCKWISE")")
         
-        print("   🎯 Face detection (current positions): Front=\(isOnFrontFace), Back=\(isOnBackFace), Left=\(isOnLeftFace), Right=\(isOnRightFace), Top=\(isOnTopFace), Bottom=\(isOnBottomFace)")
-        print("   🎯 Primary face: \(primaryFace)")
+        return rotationInfo
+    }
+    
+    /// Determine which faces a piece at position (x, y, z) is on
+    func determinePieceFaces(x: Int, y: Int, z: Int) -> [CubeFace] {
+        var faces: [CubeFace] = []
         
-        // Step 3: Combine camera-relative direction with face-aware slice selection
-        let rotationAxis: SCNVector3
-        let sliceIndex: Int
+        if z == 2 { faces.append(.front) }
+        if z == 0 { faces.append(.back) }
+        if x == 0 { faces.append(.left) }
+        if x == 2 { faces.append(.right) }
+        if y == 2 { faces.append(.top) }
+        if y == 0 { faces.append(.bottom) }
+        
+        return faces
+    }
+    
+    /// Determine allowed rotation based on visibility constraints
+    func determineAllowedRotation(
+        touchFace: CubeFace,
+        dominantFace: CubeFace,
+        forbiddenAxis: SCNVector3,
+        screenSwipeX: Float,
+        screenSwipeY: Float,
+        hitPosition: (x: Int, y: Int, z: Int),
+        faceVisibilities: [FaceVisibility]
+    ) -> RotationInfo {
+        let (x, y, z) = hitPosition
+        let isHorizontalSwipe = abs(screenSwipeX) > abs(screenSwipeY)
+        
+        // NEW LOGIC: Check if the touch face is visible or hidden
+        let touchFaceVisibility = faceVisibilities.first { $0.face == touchFace }
+        let isTouchFaceVisible = touchFaceVisibility?.isVisible ?? false
+        let touchFaceProjectedArea = touchFaceVisibility?.projectedArea ?? 0.0
+        
+        print("   👆 Touch face visibility: visible=\(isTouchFaceVisible), area=\(touchFaceProjectedArea)")
+        
+        // Determine the two allowed axes (perpendicular to forbidden axis)
+        let xAxis = SCNVector3(1, 0, 0)
+        let yAxis = SCNVector3(0, 1, 0)
+        let zAxis = SCNVector3(0, 0, 1)
+        
+        let absX = abs(forbiddenAxis.x)
+        let absY = abs(forbiddenAxis.y)
+        let absZ = abs(forbiddenAxis.z)
+        
+        // Identify which axis is forbidden
+        let isForbiddenX = absX > 0.9
+        let isForbiddenY = absY > 0.9
+        let isForbiddenZ = absZ > 0.9
+        
+        print("   🚫 Forbidden axis check: X=\(isForbiddenX), Y=\(isForbiddenY), Z=\(isForbiddenZ)")
+        
+        // Based on swipe direction and touch face visibility, choose rotation axis
+        var rotationAxis: SCNVector3
+        var sliceIndex: Int
         let clockwise: Bool
         
-        if primaryFace == "Front" || primaryFace == "Back" {
-            // Touching front or back face - use camera-relative swipe direction
-            if abs(screenSwipeX) > abs(screenSwipeY) {
-                // Horizontal swipe = row rotation
-                rotationAxis = SCNVector3(0, 1, 0)
-                sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
-                print("   🔄 \(primaryFace) face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+        if isForbiddenZ {
+            // Z axis is forbidden (front/back face is dominant)
+            // Allowed: X (column) and Y (row) rotations
+            if isHorizontalSwipe {
+                rotationAxis = yAxis  // Horizontal swipe = row rotation
+                sliceIndex = y
+                clockwise = screenSwipeX > 0  // FIXED: swipe right = clockwise
+                print("   ✅ Using Y-axis (row) rotation, slice=\(y)")
             } else {
-                // Vertical swipe = column rotation
-                rotationAxis = SCNVector3(1, 0, 0)
-                sliceIndex = x  // Use current X position
-                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise (opposite of before)
-                print("   🔄 \(primaryFace) face vertical swipe: rotating column \(x) \(clockwise ? "clockwise" : "counter-clockwise")")
+                rotationAxis = xAxis  // Vertical swipe = column rotation
+                sliceIndex = x
+                clockwise = screenSwipeY > 0  // FIXED: swipe down = clockwise
+                print("   ✅ Using X-axis (column) rotation, slice=\(x)")
             }
-        } else if primaryFace == "Left" || primaryFace == "Right" {
-            // Touching left or right face - use camera-relative swipe direction
-            if abs(screenSwipeX) > abs(screenSwipeY) {
-                // Horizontal swipe = layer rotation
-                rotationAxis = SCNVector3(0, 0, 1)
-                sliceIndex = z  // Use current Z position
-                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
-                print("   🔄 \(primaryFace) face horizontal swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
+        } else if isForbiddenY {
+            // Y axis is forbidden (top/bottom face is dominant)
+            // Allowed: X (column) and Z (layer) rotations
+            if isHorizontalSwipe {
+                rotationAxis = zAxis  // Horizontal swipe = layer rotation
+                sliceIndex = z
+                clockwise = screenSwipeX > 0  // FIXED: swipe right = clockwise
+                print("   ✅ Using Z-axis (layer) rotation, slice=\(z)")
             } else {
-                // Vertical swipe = row rotation
-                rotationAxis = SCNVector3(0, 1, 0)
-                sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise
-                print("   🔄 \(primaryFace) face vertical swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+                rotationAxis = xAxis  // Vertical swipe = column rotation
+                sliceIndex = x
+                clockwise = screenSwipeY > 0  // FIXED: swipe down = clockwise
+                print("   ✅ Using X-axis (column) rotation, slice=\(x)")
             }
-        } else if primaryFace == "Top" || primaryFace == "Bottom" {
-            // Touching top or bottom face - use camera-relative swipe direction
-            if abs(screenSwipeX) > abs(screenSwipeY) {
-                // Horizontal swipe = row rotation
-                rotationAxis = SCNVector3(0, 1, 0)
-                sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
-                print("   🔄 \(primaryFace) face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+        } else if isForbiddenX {
+            // X axis is forbidden (left/right face is dominant)
+            // Allowed: Y (row) and Z (layer) rotations
+            if isHorizontalSwipe {
+                rotationAxis = zAxis  // Horizontal swipe = layer rotation
+                sliceIndex = z
+                clockwise = screenSwipeX > 0  // FIXED: swipe right = clockwise
+                print("   ✅ Using Z-axis (layer) rotation, slice=\(z)")
             } else {
-                // Vertical swipe = layer rotation
-                rotationAxis = SCNVector3(0, 0, 1)
-                sliceIndex = z  // Use current Z position
-                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise
-                print("   🔄 \(primaryFace) face vertical swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
+                rotationAxis = yAxis  // Vertical swipe = row rotation
+                sliceIndex = y
+                clockwise = screenSwipeY > 0  // FIXED: swipe down = clockwise
+                print("   ✅ Using Y-axis (row) rotation, slice=\(y)")
             }
         } else {
-            // Fallback for edge pieces (shouldn't happen in a 3x3x3 cube)
-            print("   ⚠️ Edge piece detected, using fallback logic")
-            if abs(screenSwipeX) > abs(screenSwipeY) {
-                rotationAxis = SCNVector3(0, 1, 0)
+            // Fallback: no clear forbidden axis
+            print("   ⚠️ No clear forbidden axis, using default logic")
+            if isHorizontalSwipe {
+                rotationAxis = yAxis
                 sliceIndex = y
-                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
+                clockwise = screenSwipeX > 0  // FIXED: swipe right = clockwise
             } else {
-                rotationAxis = SCNVector3(1, 0, 0)
+                rotationAxis = xAxis
                 sliceIndex = x
-                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise
+                clockwise = screenSwipeY > 0  // FIXED: swipe down = clockwise
             }
         }
         
-        print("   🧮 Rotation axis: \(rotationAxis)")
-        print("   📍 Slice index: \(sliceIndex)")
-        print("   🎯 Direction: \(clockwise ? "CLOCKWISE" : "COUNTER-CLOCKWISE")")
-        
         return RotationInfo(axis: rotationAxis, sliceIndex: sliceIndex, clockwise: clockwise)
+    }
+    
+    /// Fallback rotation logic when visibility calculation fails
+    func fallbackRotation(x: Int, y: Int, z: Int, swipeDirection: SCNVector3, cameraDirection: SCNVector3) -> RotationInfo {
+        let cameraRight = crossProduct(cameraDirection, SCNVector3(0, 1, 0))
+        let cameraUp = crossProduct(cameraRight, cameraDirection)
+        let screenSwipeX = dotProduct(swipeDirection, normalize(cameraRight))
+        let screenSwipeY = dotProduct(swipeDirection, normalize(cameraUp))
+        
+        let isHorizontalSwipe = abs(screenSwipeX) > abs(screenSwipeY)
+        
+        if isHorizontalSwipe {
+            return RotationInfo(axis: SCNVector3(0, 1, 0), sliceIndex: y, clockwise: screenSwipeX > 0)  // FIXED
+        } else {
+            return RotationInfo(axis: SCNVector3(1, 0, 0), sliceIndex: x, clockwise: screenSwipeY > 0)  // FIXED
+        }
+    }
+    
+    // MARK: - 3D Visibility and Face Detection System
+    
+    /// Represents a face of the Rubik's cube
+    enum CubeFace: String {
+        case front  // Z = 2 (closest to default camera)
+        case back   // Z = 0
+        case left   // X = 0
+        case right  // X = 2
+        case top    // Y = 2
+        case bottom // Y = 0
+        
+        /// Get the normal vector for this face in world space
+        var normalVector: SCNVector3 {
+            switch self {
+            case .front:  return SCNVector3(0, 0, 1)   // Points toward camera
+            case .back:   return SCNVector3(0, 0, -1)  // Points away from camera
+            case .left:   return SCNVector3(-1, 0, 0)  // Points left
+            case .right:  return SCNVector3(1, 0, 0)   // Points right
+            case .top:    return SCNVector3(0, 1, 0)   // Points up
+            case .bottom: return SCNVector3(0, -1, 0)  // Points down
+            }
+        }
+        
+        /// Get the axis perpendicular to this face (the axis that would rotate this face away)
+        var perpendicularAxis: SCNVector3 {
+            return normalVector
+        }
+    }
+    
+    struct FaceVisibility {
+        let face: CubeFace
+        let isVisible: Bool
+        let projectedArea: Float  // Screen space area (0 to 1)
+        let dotProduct: Float     // How much face normal aligns with camera direction
+    }
+    
+    /// Calculate which faces are visible from the current camera position
+    func calculateFaceVisibility(cameraNode: SCNNode) -> [FaceVisibility] {
+        // Camera direction (from camera to origin)
+        let cameraPosition = cameraNode.position
+        let cameraDirection = normalize(SCNVector3(-cameraPosition.x, -cameraPosition.y, -cameraPosition.z))
+        
+        var faceVisibilities: [FaceVisibility] = []
+        
+        for face in [CubeFace.front, .back, .left, .right, .top, .bottom] {
+            let faceNormal = face.normalVector
+            
+            // Calculate dot product: if > 0, face is pointing toward camera (visible)
+            let dot = dotProduct(faceNormal, cameraDirection)
+            let isVisible = dot > 0.0
+            
+            // Approximate projected area based on how directly the face points at camera
+            // dot = 1.0 means face is perfectly perpendicular to camera (maximum area)
+            // dot = 0.0 means face is edge-on to camera (zero area)
+            let projectedArea = max(0.0, dot)
+            
+            faceVisibilities.append(FaceVisibility(
+                face: face,
+                isVisible: isVisible,
+                projectedArea: projectedArea,
+                dotProduct: dot
+            ))
+            
+            print("   👁️ Face \(face.rawValue): visible=\(isVisible), projected area=\(projectedArea), dot=\(dot)")
+        }
+        
+        return faceVisibilities
+    }
+    
+    /// Find the dominant (most visible) face from the current camera angle
+    func findDominantFace(faceVisibilities: [FaceVisibility]) -> CubeFace? {
+        // Find the visible face with the largest projected area
+        let visibleFaces = faceVisibilities.filter { $0.isVisible }
+        
+        guard let dominant = visibleFaces.max(by: { $0.projectedArea < $1.projectedArea }) else {
+            return nil
+        }
+        
+        print("   🎯 Dominant face: \(dominant.face.rawValue) (area: \(dominant.projectedArea))")
+        return dominant.face
+    }
+    
+    /// Get all visible faces sorted by projected area (largest first)
+    func getVisibleFacesSorted(faceVisibilities: [FaceVisibility]) -> [CubeFace] {
+        return faceVisibilities
+            .filter { $0.isVisible && $0.projectedArea > 0.1 }  // Filter out barely visible faces
+            .sorted { $0.projectedArea > $1.projectedArea }
+            .map { $0.face }
     }
         
         func determineSliceAndDirection(axis: SCNVector3, hitPiece: CubePiece) -> (sliceIndex: Int, clockwise: Bool) {
