@@ -832,6 +832,9 @@ struct Interactive3DCubeView: UIViewRepresentable {
         print("   📱 Screen-relative swipe: X=\(screenSwipeX), Y=\(screenSwipeY)")
         
         // Step 2: Determine which face is being touched based on CURRENT logical position
+        // For a 3x3x3 cube, pieces can be on multiple faces (edges and corners)
+        // We need to determine the PRIMARY face being touched based on camera angle
+        
         let isOnFrontFace = z == 2  // Front face (closest to camera)
         let isOnBackFace = z == 0   // Back face (farthest from camera)
         let isOnLeftFace = x == 0   // Left face
@@ -839,57 +842,71 @@ struct Interactive3DCubeView: UIViewRepresentable {
         let isOnTopFace = y == 2    // Top face
         let isOnBottomFace = y == 0 // Bottom face
         
+        // Determine the PRIMARY face based on which faces the piece is on
+        // Priority: Front/Back > Left/Right > Top/Bottom (based on typical camera angle)
+        let primaryFace: String
+        if isOnFrontFace || isOnBackFace {
+            primaryFace = isOnFrontFace ? "Front" : "Back"
+        } else if isOnLeftFace || isOnRightFace {
+            primaryFace = isOnLeftFace ? "Left" : "Right"
+        } else if isOnTopFace || isOnBottomFace {
+            primaryFace = isOnTopFace ? "Top" : "Bottom"
+        } else {
+            primaryFace = "Unknown"
+        }
+        
         print("   🎯 Face detection (current positions): Front=\(isOnFrontFace), Back=\(isOnBackFace), Left=\(isOnLeftFace), Right=\(isOnRightFace), Top=\(isOnTopFace), Bottom=\(isOnBottomFace)")
+        print("   🎯 Primary face: \(primaryFace)")
         
         // Step 3: Combine camera-relative direction with face-aware slice selection
         let rotationAxis: SCNVector3
         let sliceIndex: Int
         let clockwise: Bool
         
-                    if isOnFrontFace || isOnBackFace {
-                        // Touching front or back face - use camera-relative swipe direction
-                        if abs(screenSwipeX) > abs(screenSwipeY) {
-                            // Horizontal swipe = row rotation
-                            rotationAxis = SCNVector3(0, 1, 0)
-                            sliceIndex = y  // Use current Y position
-                            clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
-                            print("   🔄 Front/Back face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
-                        } else {
-                            // Vertical swipe = column rotation
-                            rotationAxis = SCNVector3(1, 0, 0)
-                            sliceIndex = x  // Use current X position
-                            clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
-                            print("   🔄 Front/Back face vertical swipe: rotating column \(x) \(clockwise ? "clockwise" : "counter-clockwise")")
-                        }
-        } else if isOnLeftFace || isOnRightFace {
+        if primaryFace == "Front" || primaryFace == "Back" {
+            // Touching front or back face - use camera-relative swipe direction
+            if abs(screenSwipeX) > abs(screenSwipeY) {
+                // Horizontal swipe = row rotation
+                rotationAxis = SCNVector3(0, 1, 0)
+                sliceIndex = y  // Use current Y position
+                clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
+                print("   🔄 \(primaryFace) face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+            } else {
+                // Vertical swipe = column rotation
+                rotationAxis = SCNVector3(1, 0, 0)
+                sliceIndex = x  // Use current X position
+                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise (opposite of before)
+                print("   🔄 \(primaryFace) face vertical swipe: rotating column \(x) \(clockwise ? "clockwise" : "counter-clockwise")")
+            }
+        } else if primaryFace == "Left" || primaryFace == "Right" {
             // Touching left or right face - use camera-relative swipe direction
             if abs(screenSwipeX) > abs(screenSwipeY) {
                 // Horizontal swipe = layer rotation
                 rotationAxis = SCNVector3(0, 0, 1)
                 sliceIndex = z  // Use current Z position
                 clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
-                print("   🔄 Left/Right face horizontal swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
+                print("   🔄 \(primaryFace) face horizontal swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
             } else {
                 // Vertical swipe = row rotation
                 rotationAxis = SCNVector3(0, 1, 0)
                 sliceIndex = y  // Use current Y position
-                clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
-                print("   🔄 Left/Right face vertical swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise
+                print("   🔄 \(primaryFace) face vertical swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
             }
-        } else if isOnTopFace || isOnBottomFace {
+        } else if primaryFace == "Top" || primaryFace == "Bottom" {
             // Touching top or bottom face - use camera-relative swipe direction
             if abs(screenSwipeX) > abs(screenSwipeY) {
                 // Horizontal swipe = row rotation
                 rotationAxis = SCNVector3(0, 1, 0)
                 sliceIndex = y  // Use current Y position
                 clockwise = screenSwipeX < 0  // Intuitive: swipe right = counter-clockwise
-                print("   🔄 Top/Bottom face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
+                print("   🔄 \(primaryFace) face horizontal swipe: rotating row \(y) \(clockwise ? "clockwise" : "counter-clockwise")")
             } else {
                 // Vertical swipe = layer rotation
                 rotationAxis = SCNVector3(0, 0, 1)
                 sliceIndex = z  // Use current Z position
-                clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
-                print("   🔄 Top/Bottom face vertical swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
+                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise
+                print("   🔄 \(primaryFace) face vertical swipe: rotating layer \(z) \(clockwise ? "clockwise" : "counter-clockwise")")
             }
         } else {
             // Fallback for edge pieces (shouldn't happen in a 3x3x3 cube)
@@ -901,7 +918,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
             } else {
                 rotationAxis = SCNVector3(1, 0, 0)
                 sliceIndex = x
-                clockwise = screenSwipeY > 0  // Intuitive: swipe up = clockwise
+                clockwise = screenSwipeY < 0  // FIXED: swipe down = clockwise
             }
         }
         
