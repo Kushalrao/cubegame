@@ -27,7 +27,7 @@ class CubePiece {
 class RubiksCube: ObservableObject {
     var pieces: [CubePiece] = []
     
-    let faceColors: [Color] = [.blue, .green, .red, .yellow, .orange, .white]
+    let faceColors: [Color] = [.blue, .red, .yellow, .orange, .white, .green]
     
     init() {
         resetCube()
@@ -636,12 +636,12 @@ struct Interactive3DCubeView: UIViewRepresentable {
                         
                         // Create colors array
                         let colors: [Color] = [
-                            cube.faceColors[1], // Right face - Green
-                            cube.faceColors[3], // Left face - Yellow  
-                            cube.faceColors[4], // Top face - Orange
-                            cube.faceColors[2], // Bottom face - Red
+                            cube.faceColors[1], // Right face - Red
+                            cube.faceColors[3], // Left face - Orange  
+                            cube.faceColors[4], // Top face - White
+                            cube.faceColors[2], // Bottom face - Yellow
                             cube.faceColors[0], // Front face - Blue
-                            cube.faceColors[5]  // Back face - White
+                            cube.faceColors[5]  // Back face - Green
                         ]
                         
                         let piece = CubePiece(position: (x, y, z), colors: colors, node: hitResult.node)
@@ -1513,25 +1513,25 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     // Determine colors based on position
                     let faceColors = context.coordinator.cube.faceColors
                     
-                    // Right (+X) - Green (faceColors[1])
+                    // Right (+X) - Red (faceColors[1])
                     let rightMat = SCNMaterial()
                     rightMat.diffuse.contents = UIColor(faceColors[1])
                     rightMat.lightingModel = .phong
                     materials.append(rightMat)
                     
-                    // Left (-X) - Yellow (faceColors[3])
+                    // Left (-X) - Orange (faceColors[3])
                     let leftMat = SCNMaterial()
                     leftMat.diffuse.contents = UIColor(faceColors[3])
                     leftMat.lightingModel = .phong
                     materials.append(leftMat)
                     
-                    // Top (+Y) - Orange (faceColors[4])
+                    // Top (+Y) - White (faceColors[4])
                     let topMat = SCNMaterial()
                     topMat.diffuse.contents = UIColor(faceColors[4])
                     topMat.lightingModel = .phong
                     materials.append(topMat)
                     
-                    // Bottom (-Y) - Red (faceColors[2])
+                    // Bottom (-Y) - Yellow (faceColors[2])
                     let bottomMat = SCNMaterial()
                     bottomMat.diffuse.contents = UIColor(faceColors[2])
                     bottomMat.lightingModel = .phong
@@ -1543,7 +1543,7 @@ struct Interactive3DCubeView: UIViewRepresentable {
                     frontMat.lightingModel = .phong
                     materials.append(frontMat)
                     
-                    // Back (-Z) - White (faceColors[5])
+                    // Back (-Z) - Green (faceColors[5])
                     let backMat = SCNMaterial()
                     backMat.diffuse.contents = UIColor(faceColors[5])
                     backMat.lightingModel = .phong
