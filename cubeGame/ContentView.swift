@@ -49,13 +49,14 @@ class RubiksCube: ObservableObject {
 // MARK: - Interactive 3D Rubik's Cube View
 struct Interactive3DCubeView: UIViewRepresentable {
     @ObservedObject var cube: RubiksCube
+    let onSwipeDetected: () -> Void
     
     func makeUIView(context: Context) -> SCNView {
         let sceneView = SCNView()
         let scene = createScene(context: context)
         sceneView.scene = scene
         sceneView.allowsCameraControl = false
-        sceneView.backgroundColor = UIColor.white
+        sceneView.backgroundColor = UIColor.clear
         sceneView.autoenablesDefaultLighting = false
         
         context.coordinator.sceneView = sceneView
@@ -74,11 +75,12 @@ struct Interactive3DCubeView: UIViewRepresentable {
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(cube: cube)
+        Coordinator(cube: cube, onSwipeDetected: onSwipeDetected)
     }
     
     class Coordinator: NSObject {
         var cube: RubiksCube
+        let onSwipeDetected: () -> Void
         weak var sceneView: SCNView?
         var gestureStartLocation: CGPoint?
         var gestureStartTime: Date?
@@ -101,11 +103,11 @@ struct Interactive3DCubeView: UIViewRepresentable {
         
                 // Drag and swipe gesture thresholds
                 struct GestureThresholds {
-                    let minSwipeVelocity: CGFloat = 400      // Minimum velocity for swipe detection
-                    let maxSwipeDistance: CGFloat = 80       // Maximum distance for swipe
-                    let maxSwipeDuration: TimeInterval = 0.3  // Maximum duration for swipe
+                    let minSwipeVelocity: CGFloat = 200      // Minimum velocity for swipe detection (reduced from 400)
+                    let maxSwipeDistance: CGFloat = 120      // Maximum distance for swipe (increased from 80)
+                    let maxSwipeDuration: TimeInterval = 0.5  // Maximum duration for swipe (increased from 0.3)
                     let minDragDistance: CGFloat = 25        // Minimum distance for drag
-                    let extremeVelocityThreshold: CGFloat = 700  // Very fast movements
+                    let extremeVelocityThreshold: CGFloat = 500  // Very fast movements (reduced from 700)
                     let minDistanceForAction: CGFloat = 10   // Minimum distance to trigger any action
                     
                     // Continuous movement thresholds
@@ -290,8 +292,9 @@ struct Interactive3DCubeView: UIViewRepresentable {
             }
         }
         
-        init(cube: RubiksCube) {
+        init(cube: RubiksCube, onSwipeDetected: @escaping () -> Void) {
             self.cube = cube
+            self.onSwipeDetected = onSwipeDetected
         }
         
     func getCubePiecesInRow(_ row: Int) -> [CubePiece] {
@@ -467,6 +470,17 @@ struct Interactive3DCubeView: UIViewRepresentable {
                             startLocation: gestureStartLocation!,
                             in: sceneView
                         )
+                    } else if isHighVelocity && isShortDistance {
+                        // High velocity + short distance = SWIPE (simplified condition)
+                        print("⚡ SIMPLE SWIPE = SLICE ROTATION")
+                        gestureTypeDetermined = true
+                        isSwipeGesture = true
+                        hapticGenerator.impactOccurred()
+                        performCubeSliceRotation(
+                            translation: translation,
+                            startLocation: gestureStartLocation!,
+                            in: sceneView
+                        )
                     } else if isLongDistance {
                         // Long distance = DRAG (cube rotation)
                         print("🔄 LONG DISTANCE = DRAG")
@@ -575,6 +589,10 @@ struct Interactive3DCubeView: UIViewRepresentable {
                 print("❌ No cube piece found at swipe location")
                 return
             }
+            
+            // Trigger gradient ripple effect for successful swipe detection
+            print("🎨 Triggering gradient ripple effect for successful swipe")
+            onSwipeDetected()
             
             // Determine rotation based on swipe direction
             let swipeVector = CGPoint(x: translation.x, y: translation.y)
@@ -1773,16 +1791,231 @@ struct Interactive3DCubeView: UIViewRepresentable {
     }
 }
 
-// MARK: - Main Content View
-struct ContentView: View {
-    @StateObject private var cube = RubiksCube()
+// MARK: - Gradient Background View
+struct GradientBackgroundView: View {
+    @ObservedObject var gradientManager: GradientBackgroundManager
     
     var body: some View {
         ZStack {
-            Color.white.edgesIgnoringSafeArea(.all)
+            // Base gradient
+            LinearGradient(
+                gradient: Gradient(colors: gradientManager.gradientColors),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .edgesIgnoringSafeArea(.all)
             
-            Interactive3DCubeView(cube: cube)
+            // Ripple effect overlay - primary
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    gradientManager.gradientColors[1].opacity(0.4),
+                    gradientManager.gradientColors[0].opacity(0.2),
+                    Color.clear
+                ]),
+                center: UnitPoint(x: 0.5 + 0.3 * sin(gradientManager.ripplePhase), y: 0.5 + 0.3 * cos(gradientManager.ripplePhase)),
+                startRadius: 50,
+                endRadius: 350
+            )
+            .edgesIgnoringSafeArea(.all)
+            .animation(.easeInOut(duration: 0.8), value: gradientManager.ripplePhase)
+            
+            // Additional ripple layers for depth
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    gradientManager.gradientColors[0].opacity(0.3),
+                    Color.clear
+                ]),
+                center: UnitPoint(x: 0.3 + 0.4 * sin(gradientManager.ripplePhase * 1.3), y: 0.7 + 0.2 * cos(gradientManager.ripplePhase * 1.3)),
+                startRadius: 30,
+                endRadius: 250
+            )
+            .edgesIgnoringSafeArea(.all)
+            .animation(.easeInOut(duration: 1.2), value: gradientManager.ripplePhase)
+            
+            // Third ripple layer for extra depth
+            RadialGradient(
+                gradient: Gradient(colors: [
+                    gradientManager.gradientColors[1].opacity(0.25),
+                    Color.clear
+                ]),
+                center: UnitPoint(x: 0.7 + 0.2 * sin(gradientManager.ripplePhase * 0.8), y: 0.3 + 0.3 * cos(gradientManager.ripplePhase * 0.8)),
+                startRadius: 40,
+                endRadius: 200
+            )
+            .edgesIgnoringSafeArea(.all)
+            .animation(.easeInOut(duration: 1.5), value: gradientManager.ripplePhase)
+        }
+        .onAppear {
+            gradientManager.startContinuousAnimation()
+        }
+    }
+}
+
+// Extension to get color components
+extension Color {
+    var components: (red: Double, green: Double, blue: Double, opacity: Double) {
+        let uiColor = UIColor(self)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var opacity: CGFloat = 0
+        
+        uiColor.getRed(&red, green: &green, blue: &blue, alpha: &opacity)
+        
+        return (Double(red), Double(green), Double(blue), Double(opacity))
+    }
+}
+
+// MARK: - Gradient Background Manager
+class GradientBackgroundManager: ObservableObject {
+    @Published var gradientColors: [Color] = [
+        Color(red: 0.73, green: 0.82, blue: 0.95),   // Subtle blue
+        Color(red: 0.89, green: 0.73, blue: 0.86)    // Subtle pink
+    ]
+    @Published var animationPhase: CGFloat = 0.0
+    @Published var ripplePhase: CGFloat = 0.0
+    @Published var colorCyclePhase: CGFloat = 0.0
+    
+    
+    func startContinuousAnimation() {
+        // Continuous slow rotation for ambient effect
+        withAnimation(.linear(duration: 25).repeatForever(autoreverses: false)) {
+            animationPhase = 2 * .pi
+        }
+        
+        // Slow color cycling in background
+        withAnimation(.linear(duration: 30).repeatForever(autoreverses: false)) {
+            colorCyclePhase = 2 * .pi
+        }
+    }
+    
+    func triggerRippleEffect() {
+        print("🌈 Gradient ripple effect triggered!")
+        print("🌈 Current colors: \(gradientColors)")
+        
+        // Shift colors: bottom color flows to top
+        let newTopColor = gradientColors[1]
+        
+        // Generate a new random bottom color
+        let randomColor = generateRandomColor()
+        let newBottomColor = Color(
+            red: randomColor.r,
+            green: randomColor.g,
+            blue: randomColor.b
+        )
+        
+        let newColors = [newTopColor, newBottomColor]
+        print("🌈 New colors: \(newColors)")
+        
+        // Animate the color transition
+        withAnimation(.easeInOut(duration: 0.8)) {
+            gradientColors = newColors
+        }
+        
+        // Trigger ripple animation with multiple phases
+        withAnimation(.easeInOut(duration: 1.2)) {
+            ripplePhase += .pi * 1.5
+        }
+        
+        // Additional ripple effects
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            withAnimation(.easeOut(duration: 0.6)) {
+                self.ripplePhase += .pi * 0.5
+            }
+        }
+        
+        // Reset ripple phase after all animations complete
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            self.ripplePhase = 0
+        }
+    }
+    
+    // Test function to manually trigger the effect
+    func testRippleEffect() {
+        print("🧪 Testing ripple effect manually")
+        triggerRippleEffect()
+    }
+    
+    func generateRandomColor() -> (r: Double, g: Double, b: Double) {
+        // Generate subtle, less saturated colors with brightness around 91%
+        var newColor: (r: Double, g: Double, b: Double)
+        let currentBottomColor = gradientColors[1]
+        
+        repeat {
+            // Generate random hue (0.0 to 1.0)
+            let hue = Double.random(in: 0.0...1.0)
+            
+            // Keep saturation very low for subtle colors (0.12 to 0.15)
+            let saturation = Double.random(in: 0.12...0.15)
+            
+            // Set brightness around 91% (0.91)
+            let brightness = 0.91
+            
+            // Convert HSB to RGB
+            newColor = hsbToRgb(hue: hue, saturation: saturation, brightness: brightness)
+            
+        } while isColorSimilar(
+            current: (currentBottomColor.components.red, currentBottomColor.components.green, currentBottomColor.components.blue),
+            new: newColor,
+            threshold: 0.2
+        )
+        
+        return newColor
+    }
+    
+    func hsbToRgb(hue: Double, saturation: Double, brightness: Double) -> (r: Double, g: Double, b: Double) {
+        let c = brightness * saturation
+        let x = c * (1 - abs((hue * 6).truncatingRemainder(dividingBy: 2) - 1))
+        let m = brightness - c
+        
+        var r: Double, g: Double, b: Double
+        
+        switch hue * 6 {
+        case 0..<1:
+            r = c; g = x; b = 0
+        case 1..<2:
+            r = x; g = c; b = 0
+        case 2..<3:
+            r = 0; g = c; b = x
+        case 3..<4:
+            r = 0; g = x; b = c
+        case 4..<5:
+            r = x; g = 0; b = c
+        default:
+            r = c; g = 0; b = x
+        }
+        
+        return (
+            r: r + m,
+            g: g + m,
+            b: b + m
+        )
+    }
+    
+    func isColorSimilar(current: (r: Double, g: Double, b: Double), new: (r: Double, g: Double, b: Double), threshold: Double) -> Bool {
+        let distance = sqrt(
+            pow(current.r - new.r, 2) +
+            pow(current.g - new.g, 2) +
+            pow(current.b - new.b, 2)
+        )
+        return distance < threshold
+    }
+}
+
+// MARK: - Main Content View
+struct ContentView: View {
+    @StateObject private var cube = RubiksCube()
+    @StateObject private var gradientManager = GradientBackgroundManager()
+    
+    var body: some View {
+        ZStack {
+            GradientBackgroundView(gradientManager: gradientManager)
+            
+            Interactive3DCubeView(cube: cube, onSwipeDetected: {
+                gradientManager.triggerRippleEffect()
+            })
                 .edgesIgnoringSafeArea(.all)
+            
         }
     }
 }
