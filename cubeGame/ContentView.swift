@@ -572,61 +572,172 @@ struct Interactive3DCubeView: UIViewRepresentable {
         }
         
         func performCubeSliceRotation(translation: CGPoint, startLocation: CGPoint, in sceneView: SCNView) {
-            // Check for stuck animations and reset if necessary
+            // Recover from a stuck animation flag if one has been pending too long.
             if let startTime = animationStartTime, Date().timeIntervalSince(startTime) > 1.0 {
                 print("⚠️ Detected stuck animation during gesture, forcing reset")
                 isAnimating = false
                 animationStartTime = nil
             }
-            
-            guard !isAnimating else { 
+
+            guard !isAnimating else {
                 print("❌ Rotation blocked - already animating (will retry after timeout)")
-                return 
+                return
             }
-            
-            // Find hit piece at start location
-            guard let hitPiece = findHitCubePiece(at: startLocation, in: sceneView) else {
+
+            // Identify both the piece and which face was touched in world space.
+            // worldNormal-based face detection is what makes corner/edge piece taps reliable.
+            guard let hit = findHitWithFace(at: startLocation, in: sceneView) else {
                 print("❌ No cube piece found at swipe location")
                 return
             }
-            
-            // Trigger gradient ripple effect for successful swipe detection
+
             print("🎨 Triggering gradient ripple effect for successful swipe")
             onSwipeDetected()
-            
-            // Determine rotation based on swipe direction
-            let swipeVector = CGPoint(x: translation.x, y: translation.y)
-            
-            // Convert to world space swipe direction
+
             guard let cameraNode = sceneView.scene?.rootNode.childNode(withName: "camera", recursively: true) else {
                 print("❌ Camera node not found")
                 return
             }
-            
-            let cameraDirection = SCNVector3(-cameraNode.position.x, -cameraNode.position.y, -cameraNode.position.z)
-            let normalizedCameraDirection = normalize(cameraDirection)
-            
-            // Convert swipe to world space
-            let worldSwipeDirection = convertSwipeToWorldSpace(swipeVector: swipeVector, cameraNode: cameraNode)
-            
-            // Determine rotation axis and slice
-            let rotationInfo = determineRotationAxisAndSlice(
-                swipeDirection: worldSwipeDirection,
-                cameraDirection: normalizedCameraDirection,
-                hitPiece: hitPiece
+
+            let worldSwipe = convertSwipeToWorldSpace(
+                swipeVector: CGPoint(x: translation.x, y: translation.y),
+                cameraNode: cameraNode
             )
-            
-            // Perform the rotation
-            performArbitraryAxisRotation(
-                axis: rotationInfo.axis,
-                sliceIndex: rotationInfo.sliceIndex,
-                clockwise: rotationInfo.clockwise
-            )
+
+            guard let plan = planRotation(worldSwipe: worldSwipe, hitPiece: hit.piece, touchedFace: hit.touchedFace) else {
+                print("❌ Could not derive a rotation plan from this swipe")
+                return
+            }
+
+            executePlannedRotation(plan)
         }
         
         // MARK: - Camera-Relative Rotation System
-        
-        
+
+        /// Build a CubePiece from a named SCNNode of form "cube_x_y_z".
+        /// Colors are placeholder — only `position` and `node` matter for rotation logic.
+        private func pieceFromNode(_ node: SCNNode) -> CubePiece? {
+            guard let nodeName = node.name, nodeName.hasPrefix("cube_") else { return nil }
+            let parts = nodeName.replacingOccurrences(of: "cube_", with: "").split(separator: "_")
+            guard parts.count == 3,
+                  let x = Int(parts[0]),
+                  let y = Int(parts[1]),
+                  let z = Int(parts[2]) else { return nil }
+            let colors: [Color] = [
+                cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
+                cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
+            ]
+            return CubePiece(position: (x, y, z), colors: colors, node: node)
+        }
+
+        /// Hit test that returns both the piece and the world-space face touched.
+        /// Uses SCNHitTestResult.worldNormal as the authoritative face identifier; this
+        /// is robust to corner/edge piece ambiguity that position-based inference can't resolve.
+        func findHitWithFace(at point: CGPoint, in sceneView: SCNView) -> (piece: CubePiece, touchedFace: CubeFace)? {
+            // Primary: closest visible hit with backface culling on. This excludes the back of
+            // the cube even when corner pieces would otherwise yield two candidate normals.
+            let primaryOptions: [SCNHitTestOption: Any] = [
+                .searchMode: SCNHitTestSearchMode.closest.rawValue,
+                .ignoreHiddenNodes: true,
+                .backFaceCulling: true,
+                .boundingBoxOnly: false
+            ]
+            for r in sceneView.hitTest(point, options: primaryOptions) {
+                if let piece = pieceFromNode(r.node),
+                   let face = CubeFace.from(worldNormal: r.worldNormal) {
+                    return (piece, face)
+                }
+            }
+
+            // Fallback A: scan all hits more permissively, still preferring world normal.
+            let permissive: [SCNHitTestOption: Any] = [
+                .searchMode: SCNHitTestSearchMode.all.rawValue,
+                .ignoreHiddenNodes: false,
+                .backFaceCulling: false,
+                .boundingBoxOnly: false,
+                .firstFoundOnly: false
+            ]
+            for r in sceneView.hitTest(point, options: permissive) {
+                if let piece = pieceFromNode(r.node),
+                   let face = CubeFace.from(worldNormal: r.worldNormal) {
+                    return (piece, face)
+                }
+            }
+
+            // Fallback B: small jitter to recover from hits that landed in the inter-cubelet gap.
+            let jitter: [CGPoint] = [
+                CGPoint(x: -10, y: 0), CGPoint(x: 10, y: 0),
+                CGPoint(x: 0, y: -10), CGPoint(x: 0, y: 10),
+                CGPoint(x: -20, y: 0), CGPoint(x: 20, y: 0),
+                CGPoint(x: 0, y: -20), CGPoint(x: 0, y: 20)
+            ]
+            for off in jitter {
+                let p = CGPoint(x: point.x + off.x, y: point.y + off.y)
+                for r in sceneView.hitTest(p, options: primaryOptions) {
+                    if let piece = pieceFromNode(r.node),
+                       let face = CubeFace.from(worldNormal: r.worldNormal) {
+                        return (piece, face)
+                    }
+                }
+            }
+
+            // Fallback C: nearest piece on screen, tighter than legacy 50px to reduce wrong
+            // slice classifications. Face is inferred since worldNormal isn't available here.
+            if let nearest = findClosestPieceWithDistance(to: point, in: sceneView),
+               nearest.distance <= 30 {
+                let face = inferTouchedFace(for: nearest.piece, in: sceneView)
+                return (nearest.piece, face)
+            }
+            return nil
+        }
+
+        /// Closest piece on screen plus its pixel distance.
+        private func findClosestPieceWithDistance(to point: CGPoint, in sceneView: SCNView) -> (piece: CubePiece, distance: Float)? {
+            guard let scene = sceneView.scene else { return nil }
+            var bestPiece: CubePiece?
+            var bestDistance: Float = .greatestFiniteMagnitude
+            for x in 0..<3 {
+                for y in 0..<3 {
+                    for z in 0..<3 {
+                        let name = "cube_\(x)_\(y)_\(z)"
+                        guard let node = scene.rootNode.childNode(withName: name, recursively: true) else { continue }
+                        let s = sceneView.projectPoint(node.worldPosition)
+                        let dx = Float(point.x) - s.x
+                        let dy = Float(point.y) - s.y
+                        let d = sqrt(dx * dx + dy * dy)
+                        if d < bestDistance {
+                            bestDistance = d
+                            let colors: [Color] = [
+                                cube.faceColors[1], cube.faceColors[3], cube.faceColors[4],
+                                cube.faceColors[2], cube.faceColors[0], cube.faceColors[5]
+                            ]
+                            bestPiece = CubePiece(position: (x, y, z), colors: colors, node: node)
+                        }
+                    }
+                }
+            }
+            guard let p = bestPiece else { return nil }
+            return (p, bestDistance)
+        }
+
+        /// When worldNormal is unavailable (closest-piece fallback), pick the piece's
+        /// outward face most aligned with the direction from cube center to camera.
+        private func inferTouchedFace(for piece: CubePiece, in sceneView: SCNView) -> CubeFace {
+            let outward = determinePieceFaces(x: piece.position.x, y: piece.position.y, z: piece.position.z)
+            guard !outward.isEmpty else { return .front }
+            guard let cameraNode = sceneView.scene?.rootNode.childNode(withName: "camera", recursively: true) else {
+                return outward.first!
+            }
+            let camOut = normalize(cameraNode.position)
+            var best = outward.first!
+            var bestDot: Float = -2
+            for face in outward {
+                let d = dotProduct(face.normalVector, camOut)
+                if d > bestDot { bestDot = d; best = face }
+            }
+            return best
+        }
+
         func findHitCubePiece(at point: CGPoint, in sceneView: SCNView) -> CubePiece? {
             // Try multiple hit-testing approaches for better reliability
             
@@ -803,14 +914,18 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let cameraTransform = cameraNode.transform
             let rightVector = SCNVector3(cameraTransform.m11, cameraTransform.m12, cameraTransform.m13)
             let upVector = SCNVector3(cameraTransform.m21, cameraTransform.m22, cameraTransform.m23)
-            
-            // Convert screen swipe to world space
+
+            // iOS UIKit screen Y points DOWN; world up points UP. Negate Y so that a finger
+            // moving up the screen produces a world-space vector with positive camera-up component.
+            let sx = Float(swipeVector.x)
+            let sy = -Float(swipeVector.y)
+
             let worldSwipe = SCNVector3(
-                Float(swipeVector.x) * rightVector.x + Float(swipeVector.y) * upVector.x,
-                Float(swipeVector.x) * rightVector.y + Float(swipeVector.y) * upVector.y,
-                Float(swipeVector.x) * rightVector.z + Float(swipeVector.y) * upVector.z
+                sx * rightVector.x + sy * upVector.x,
+                sx * rightVector.y + sy * upVector.y,
+                sx * rightVector.z + sy * upVector.z
             )
-            
+
             return normalize(worldSwipe)
         }
         
@@ -819,7 +934,88 @@ struct Interactive3DCubeView: UIViewRepresentable {
             let sliceIndex: Int
             let clockwise: Bool
         }
+
+        /// A rotation derived from a touch + swipe, expressed in a uniform "right-hand-rule"
+        /// convention so the dispatcher does not have to reason about each primitive's local sign.
+        struct PlannedRotation {
+            enum Axis { case x, y, z }
+            let axis: Axis
+            let sliceIndex: Int          // hit piece coordinate on `axis` (0...2)
+            let rightHandPositive: Bool  // true => right-hand-rule positive rotation around +axis
+        }
+
+        /// Map a PlannedRotation to the existing rotateRow/Column/Layer primitives.
+        /// Note: rotateRow uses an inverted angle sign vs the other two, so the
+        /// clockwise flag for Y is the negation of rightHandPositive.
+        func executePlannedRotation(_ plan: PlannedRotation) {
+            switch plan.axis {
+            case .x:
+                // rotateColumn: clockwise=true  → angle = +π/2 around +X  (RH+)
+                rotateColumn(plan.sliceIndex, clockwise: plan.rightHandPositive)
+            case .y:
+                // rotateRow:    clockwise=true  → angle = −π/2 around +Y  (RH−)
+                rotateRow(plan.sliceIndex, clockwise: !plan.rightHandPositive)
+            case .z:
+                // rotateLayer:  clockwise=true  → angle = +π/2 around +Z  (RH+)
+                rotateLayer(plan.sliceIndex, clockwise: plan.rightHandPositive)
+            }
+        }
         
+    /// Decide which slice to rotate and in which direction.
+    ///
+    /// Model:
+    ///   - The forbidden axis is the touched face's normal — a swipe on a face cannot
+    ///     express a rotation that spins that face flat in its own plane.
+    ///   - The rotation axis is the cross product (face normal × swipe-projected-onto-face).
+    ///     It lies in the face plane, perpendicular to the swipe, and is one of the
+    ///     two valid rotation axes for that face.
+    ///   - The slice index is the hit piece's coordinate on that axis (so a swipe on a
+    ///     top-face piece at z=2 rotates the front layer, not some arbitrary row).
+    ///   - The sign of the cross product on the snapped axis gives the right-hand-rule
+    ///     direction; the dispatcher maps it to the existing rotateRow/Column/Layer flag.
+    func planRotation(worldSwipe: SCNVector3, hitPiece: CubePiece, touchedFace: CubeFace) -> PlannedRotation? {
+        let nodeName = hitPiece.node.name ?? ""
+        let parts = nodeName.replacingOccurrences(of: "cube_", with: "").split(separator: "_")
+        guard parts.count == 3,
+              let x = Int(parts[0]),
+              let y = Int(parts[1]),
+              let z = Int(parts[2]) else { return nil }
+
+        let faceNormal = touchedFace.normalVector
+
+        // Project the swipe onto the touched face's tangent plane.
+        let proj = dotProduct(worldSwipe, faceNormal)
+        let swipeOnFace = SCNVector3(
+            worldSwipe.x - faceNormal.x * proj,
+            worldSwipe.y - faceNormal.y * proj,
+            worldSwipe.z - faceNormal.z * proj
+        )
+        let mag = sqrt(swipeOnFace.x * swipeOnFace.x
+                     + swipeOnFace.y * swipeOnFace.y
+                     + swipeOnFace.z * swipeOnFace.z)
+        // Reject swipes that lie essentially along the face normal — can't tell direction.
+        guard mag > 0.05 else { return nil }
+        let swipeDir = SCNVector3(swipeOnFace.x / mag, swipeOnFace.y / mag, swipeOnFace.z / mag)
+
+        // Rotation axis: perpendicular to face normal and to the in-face swipe.
+        let axis = crossProduct(faceNormal, swipeDir)
+        let ax = abs(axis.x), ay = abs(axis.y), az = abs(axis.z)
+
+        let axisChoice: PlannedRotation.Axis
+        let sliceIndex: Int
+        let rhPositive: Bool
+        if ax >= ay && ax >= az {
+            axisChoice = .x; sliceIndex = x; rhPositive = axis.x > 0
+        } else if ay >= ax && ay >= az {
+            axisChoice = .y; sliceIndex = y; rhPositive = axis.y > 0
+        } else {
+            axisChoice = .z; sliceIndex = z; rhPositive = axis.z > 0
+        }
+
+        print("🧭 plan: touched=\(touchedFace.rawValue) axis=\(axisChoice) slice=\(sliceIndex) RH+=\(rhPositive)")
+        return PlannedRotation(axis: axisChoice, sliceIndex: sliceIndex, rightHandPositive: rhPositive)
+    }
+
     func determineRotationAxisAndSlice(swipeDirection: SCNVector3, cameraDirection: SCNVector3, hitPiece: CubePiece) -> RotationInfo {
         // Parse the node name to get the actual logical position
         let nodeName = hitPiece.node.name ?? ""
@@ -1053,6 +1249,20 @@ struct Interactive3DCubeView: UIViewRepresentable {
         /// Get the axis perpendicular to this face (the axis that would rotate this face away)
         var perpendicularAxis: SCNVector3 {
             return normalVector
+        }
+
+        /// Snap an arbitrary normal vector to the nearest cardinal face.
+        /// Used to convert SCNHitTestResult.worldNormal into a definite CubeFace,
+        /// so we know which face of the cube the user actually touched in world space.
+        static func from(worldNormal n: SCNVector3) -> CubeFace? {
+            let ax = abs(n.x), ay = abs(n.y), az = abs(n.z)
+            if ax >= ay && ax >= az {
+                return n.x >= 0 ? .right : .left
+            } else if ay >= ax && ay >= az {
+                return n.y >= 0 ? .top : .bottom
+            } else {
+                return n.z >= 0 ? .front : .back
+            }
         }
     }
     
