@@ -91,3 +91,12 @@ iOSInjectionProject/
 
 # macOS
 .DS_Store
+
+# Firecrawl research cache (raw scrapes)
+.firecrawl/
+
+# Compiled verification harnesses (docs/*.swift are the sources)
+docs/cubesim
+docs/scn
+docs/lbl_dev
+docs/survey.txt

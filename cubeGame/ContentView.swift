@@ -1637,13 +1637,16 @@ struct Interactive3DCubeView: UIViewRepresentable {
                         // Apply the world transform
                         piece.node.transform = finalTransform
                         
-                        // Update logical position after rotation around Y
+                        // Update logical position after rotation around Y.
+                        // clockwise=true drives SCNAction y:-pi/2, i.e. a right-hand-NEGATIVE
+                        // turn about +Y, so the permutation must match that sign. (Verified
+                        // against SceneKit in docs/scn.swift - see docs/RESEARCH.md.)
                         let (x, y, z) = piece.position
                         let oldPos = piece.position
                         if clockwise {
-                            piece.position = (z, y, 2 - x)
-                        } else {
                             piece.position = (2 - z, y, x)
+                        } else {
+                            piece.position = (z, y, 2 - x)
                         }
                         
                         // Update node name to match new logical position
